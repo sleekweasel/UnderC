@@ -1,0 +1,8 @@
+OverC was my third year project at Warwick University, to run on my A3000.
+
+This is two projects: !OverC, which is a bootstrapping C compiler written in
+BBC BASIC, and !C-C which is my half-written C translation of OverC.
+
+OverC seems to run on RISC OS 3.71 (particularly rpcemu), but not on the
+Raspberry Pi for some reason - it gets an illegal something or other.
+
