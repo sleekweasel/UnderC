@@ -1,0 +1,741 @@
+copy Docum.threads_h,0fc Docum.threads_h
+settype Docum.threads_h 0fc
+
+copy !BasicLib.Library.RecordOld,ffb !BasicLib.Library.RecordOld
+settype !BasicLib.Library.RecordOld ffb
+
+copy !BasicLib.Library.HashTable,ffb !BasicLib.Library.HashTable
+settype !BasicLib.Library.HashTable ffb
+
+copy !BasicLib.Library.BinTree,ffb !BasicLib.Library.BinTree
+settype !BasicLib.Library.BinTree ffb
+
+copy !BasicLib.Library.Records,ffb !BasicLib.Library.Records
+settype !BasicLib.Library.Records ffb
+
+copy !BasicLib.!Sprites,ff9 !BasicLib.!Sprites
+settype !BasicLib.!Sprites ff9
+
+copy !BasicLib.!Run,feb !BasicLib.!Run
+settype !BasicLib.!Run feb
+
+copy !BasicLib.!Boot,feb !BasicLib.!Boot
+settype !BasicLib.!Boot feb
+
+copy !C-C.o.strings,0f0 !C-C.o.strings
+settype !C-C.o.strings 0f0
+
+copy !C-C.o.RunAsb,0f0 !C-C.o.RunAsb
+settype !C-C.o.RunAsb 0f0
+
+copy !C-C.o.compile,0f0 !C-C.o.compile
+settype !C-C.o.compile 0f0
+
+copy !C-C.o.tokens,0f0 !C-C.o.tokens
+settype !C-C.o.tokens 0f0
+
+copy !C-C.o.macro,0f0 !C-C.o.macro
+settype !C-C.o.macro 0f0
+
+copy !C-C.o.typemod,0f0 !C-C.o.typemod
+settype !C-C.o.typemod 0f0
+
+copy !C-C.o.tree,0f0 !C-C.o.tree
+settype !C-C.o.tree 0f0
+
+copy !C-C.o.run,feb !C-C.o.run
+settype !C-C.o.run feb
+
+copy !C-C.o.exprtype,0f0 !C-C.o.exprtype
+settype !C-C.o.exprtype 0f0
+
+copy !C-C.o.pragma,0f0 !C-C.o.pragma
+settype !C-C.o.pragma 0f0
+
+copy !C-C.o.declartion,0f0 !C-C.o.declartion
+settype !C-C.o.declartion 0f0
+
+copy !C-C.o.expr2,0f0 !C-C.o.expr2
+settype !C-C.o.expr2 0f0
+
+copy !C-C.o.parse,0f0 !C-C.o.parse
+settype !C-C.o.parse 0f0
+
+copy !C-C.o.prepr,0f0 !C-C.o.prepr
+settype !C-C.o.prepr 0f0
+
+copy !C-C.o.struct,0f0 !C-C.o.struct
+settype !C-C.o.struct 0f0
+
+copy !C-C.o.if,0f0 !C-C.o.if
+settype !C-C.o.if 0f0
+
+copy !C-C.o.expr,0f0 !C-C.o.expr
+settype !C-C.o.expr 0f0
+
+copy !C-C.o.aout,ff8 !C-C.o.aout
+settype !C-C.o.aout ff8
+
+copy !C-C.o.error,0f0 !C-C.o.error
+settype !C-C.o.error 0f0
+
+copy !C-C.SpriteFile,ff9 !C-C.SpriteFile
+settype !C-C.SpriteFile ff9
+
+copy !C-C.!Sprites,ff9 !C-C.!Sprites
+settype !C-C.!Sprites ff9
+
+copy !C-C.WimpStuff.o.RunAsb,0f0 !C-C.WimpStuff.o.RunAsb
+settype !C-C.WimpStuff.o.RunAsb 0f0
+
+copy !C-C.WimpStuff.o.main,0f0 !C-C.WimpStuff.o.main
+settype !C-C.WimpStuff.o.main 0f0
+
+copy !C-C.WimpStuff.o.aout,ff8 !C-C.WimpStuff.o.aout
+settype !C-C.WimpStuff.o.aout ff8
+
+copy !C-C.WimpStuff.c.main,0fc !C-C.WimpStuff.c.main
+settype !C-C.WimpStuff.c.main 0fc
+
+copy !C-C.!Run,feb !C-C.!Run
+settype !C-C.!Run feb
+
+copy !C-C.h.macro,0fc !C-C.h.macro
+settype !C-C.h.macro 0fc
+
+copy !C-C.h.exprtype,0fc !C-C.h.exprtype
+settype !C-C.h.exprtype 0fc
+
+copy !C-C.h.if,0fc !C-C.h.if
+settype !C-C.h.if 0fc
+
+copy !C-C.h.struct,0fc !C-C.h.struct
+settype !C-C.h.struct 0fc
+
+copy !C-C.h.error,0fc !C-C.h.error
+settype !C-C.h.error 0fc
+
+copy !C-C.h.prepr,0fc !C-C.h.prepr
+settype !C-C.h.prepr 0fc
+
+copy !C-C.h.expr,0fc !C-C.h.expr
+settype !C-C.h.expr 0fc
+
+copy !C-C.h.types,0fc !C-C.h.types
+settype !C-C.h.types 0fc
+
+copy !C-C.h.tokens,0fc !C-C.h.tokens
+settype !C-C.h.tokens 0fc
+
+copy !C-C.h.strings,0fc !C-C.h.strings
+settype !C-C.h.strings 0fc
+
+copy !C-C.h.compile,0fc !C-C.h.compile
+settype !C-C.h.compile 0fc
+
+copy !C-C.h.tree,0fc !C-C.h.tree
+settype !C-C.h.tree 0fc
+
+copy !C-C.h.malloc,0fc !C-C.h.malloc
+settype !C-C.h.malloc 0fc
+
+copy !C-C.h.parse,0fc !C-C.h.parse
+settype !C-C.h.parse 0fc
+
+copy !C-C.c.expr2,0fc !C-C.c.expr2
+settype !C-C.c.expr2 0fc
+
+copy !C-C.c.macro,0fc !C-C.c.macro
+settype !C-C.c.macro 0fc
+
+copy !C-C.c.exprtype,0fc !C-C.c.exprtype
+settype !C-C.c.exprtype 0fc
+
+copy !C-C.c.if,0fc !C-C.c.if
+settype !C-C.c.if 0fc
+
+copy !C-C.c.struct,0fc !C-C.c.struct
+settype !C-C.c.struct 0fc
+
+copy !C-C.c.error,0fc !C-C.c.error
+settype !C-C.c.error 0fc
+
+copy !C-C.c.prepr,0fc !C-C.c.prepr
+settype !C-C.c.prepr 0fc
+
+copy !C-C.c.expr,0fc !C-C.c.expr
+settype !C-C.c.expr 0fc
+
+copy !C-C.c.typemod,0fc !C-C.c.typemod
+settype !C-C.c.typemod 0fc
+
+copy !C-C.c.tokens,0fc !C-C.c.tokens
+settype !C-C.c.tokens 0fc
+
+copy !C-C.c.strings,0fc !C-C.c.strings
+settype !C-C.c.strings 0fc
+
+copy !C-C.c.compile,0fc !C-C.c.compile
+settype !C-C.c.compile 0fc
+
+copy !C-C.c.tree,0fc !C-C.c.tree
+settype !C-C.c.tree 0fc
+
+copy !C-C.c.pragma,0fc !C-C.c.pragma
+settype !C-C.c.pragma 0fc
+
+copy !C-C.c.parse,0fc !C-C.c.parse
+settype !C-C.c.parse 0fc
+
+copy !C-C.c.declartion,0fc !C-C.c.declartion
+settype !C-C.c.declartion 0fc
+
+copy !C-C.Templates,fec !C-C.Templates
+settype !C-C.Templates fec
+
+copy ARMOps,ffb ARMOps
+settype ARMOps ffb
+
+copy backs.971127.o.strings,0f0 backs.971127.o.strings
+settype backs.971127.o.strings 0f0
+
+copy backs.971127.o.RunAsb,0f0 backs.971127.o.RunAsb
+settype backs.971127.o.RunAsb 0f0
+
+copy backs.971127.o.tokens,0f0 backs.971127.o.tokens
+settype backs.971127.o.tokens 0f0
+
+copy backs.971127.o.macro,0f0 backs.971127.o.macro
+settype backs.971127.o.macro 0f0
+
+copy backs.971127.o.typemod,0f0 backs.971127.o.typemod
+settype backs.971127.o.typemod 0f0
+
+copy backs.971127.o.tree,0f0 backs.971127.o.tree
+settype backs.971127.o.tree 0f0
+
+copy backs.971127.o.run,feb backs.971127.o.run
+settype backs.971127.o.run feb
+
+copy backs.971127.o.exprtype,0f0 backs.971127.o.exprtype
+settype backs.971127.o.exprtype 0f0
+
+copy backs.971127.o.pragma,0f0 backs.971127.o.pragma
+settype backs.971127.o.pragma 0f0
+
+copy backs.971127.o.declartion,0f0 backs.971127.o.declartion
+settype backs.971127.o.declartion 0f0
+
+copy backs.971127.o.expr2,0f0 backs.971127.o.expr2
+settype backs.971127.o.expr2 0f0
+
+copy backs.971127.o.parse,0f0 backs.971127.o.parse
+settype backs.971127.o.parse 0f0
+
+copy backs.971127.o.prepr,0f0 backs.971127.o.prepr
+settype backs.971127.o.prepr 0f0
+
+copy backs.971127.o.struct,0f0 backs.971127.o.struct
+settype backs.971127.o.struct 0f0
+
+copy backs.971127.o.if,0f0 backs.971127.o.if
+settype backs.971127.o.if 0f0
+
+copy backs.971127.o.expr,0f0 backs.971127.o.expr
+settype backs.971127.o.expr 0f0
+
+copy backs.971127.o.aout,ff8 backs.971127.o.aout
+settype backs.971127.o.aout ff8
+
+copy backs.971127.o.error,0f0 backs.971127.o.error
+settype backs.971127.o.error 0f0
+
+copy backs.971127.h.macro,0fc backs.971127.h.macro
+settype backs.971127.h.macro 0fc
+
+copy backs.971127.h.exprtype,0fc backs.971127.h.exprtype
+settype backs.971127.h.exprtype 0fc
+
+copy backs.971127.h.if,0fc backs.971127.h.if
+settype backs.971127.h.if 0fc
+
+copy backs.971127.h.struct,0fc backs.971127.h.struct
+settype backs.971127.h.struct 0fc
+
+copy backs.971127.h.error,0fc backs.971127.h.error
+settype backs.971127.h.error 0fc
+
+copy backs.971127.h.prepr,0fc backs.971127.h.prepr
+settype backs.971127.h.prepr 0fc
+
+copy backs.971127.h.expr,0fc backs.971127.h.expr
+settype backs.971127.h.expr 0fc
+
+copy backs.971127.h.types,0fc backs.971127.h.types
+settype backs.971127.h.types 0fc
+
+copy backs.971127.h.tokens,0fc backs.971127.h.tokens
+settype backs.971127.h.tokens 0fc
+
+copy backs.971127.h.strings,0fc backs.971127.h.strings
+settype backs.971127.h.strings 0fc
+
+copy backs.971127.h.tree,0fc backs.971127.h.tree
+settype backs.971127.h.tree 0fc
+
+copy backs.971127.h.malloc,0fc backs.971127.h.malloc
+settype backs.971127.h.malloc 0fc
+
+copy backs.971127.h.parse,0fc backs.971127.h.parse
+settype backs.971127.h.parse 0fc
+
+copy backs.971127.c.expr2,0fc backs.971127.c.expr2
+settype backs.971127.c.expr2 0fc
+
+copy backs.971127.c.macro,0fc backs.971127.c.macro
+settype backs.971127.c.macro 0fc
+
+copy backs.971127.c.exprtype,0fc backs.971127.c.exprtype
+settype backs.971127.c.exprtype 0fc
+
+copy backs.971127.c.if,0fc backs.971127.c.if
+settype backs.971127.c.if 0fc
+
+copy backs.971127.c.struct,0fc backs.971127.c.struct
+settype backs.971127.c.struct 0fc
+
+copy backs.971127.c.error,0fc backs.971127.c.error
+settype backs.971127.c.error 0fc
+
+copy backs.971127.c.prepr,0fc backs.971127.c.prepr
+settype backs.971127.c.prepr 0fc
+
+copy backs.971127.c.expr,0fc backs.971127.c.expr
+settype backs.971127.c.expr 0fc
+
+copy backs.971127.c.typemod,0fc backs.971127.c.typemod
+settype backs.971127.c.typemod 0fc
+
+copy backs.971127.c.tokens,0fc backs.971127.c.tokens
+settype backs.971127.c.tokens 0fc
+
+copy backs.971127.c.strings,0fc backs.971127.c.strings
+settype backs.971127.c.strings 0fc
+
+copy backs.971127.c.tree,0fc backs.971127.c.tree
+settype backs.971127.c.tree 0fc
+
+copy backs.971127.c.pragma,0fc backs.971127.c.pragma
+settype backs.971127.c.pragma 0fc
+
+copy backs.971127.c.parse,0fc backs.971127.c.parse
+settype backs.971127.c.parse 0fc
+
+copy backs.971127.c.declartion,0fc backs.971127.c.declartion
+settype backs.971127.c.declartion 0fc
+
+copy backs.970719.o.strings,0f0 backs.970719.o.strings
+settype backs.970719.o.strings 0f0
+
+copy backs.970719.o.RunAsb,0f0 backs.970719.o.RunAsb
+settype backs.970719.o.RunAsb 0f0
+
+copy backs.970719.o.tokens,0f0 backs.970719.o.tokens
+settype backs.970719.o.tokens 0f0
+
+copy backs.970719.o.macro,0f0 backs.970719.o.macro
+settype backs.970719.o.macro 0f0
+
+copy backs.970719.o.typemod,0f0 backs.970719.o.typemod
+settype backs.970719.o.typemod 0f0
+
+copy backs.970719.o.tree,0f0 backs.970719.o.tree
+settype backs.970719.o.tree 0f0
+
+copy backs.970719.o.run,feb backs.970719.o.run
+settype backs.970719.o.run feb
+
+copy backs.970719.o.exprtype,0f0 backs.970719.o.exprtype
+settype backs.970719.o.exprtype 0f0
+
+copy backs.970719.o.pragma,0f0 backs.970719.o.pragma
+settype backs.970719.o.pragma 0f0
+
+copy backs.970719.o.declartion,0f0 backs.970719.o.declartion
+settype backs.970719.o.declartion 0f0
+
+copy backs.970719.o.parse,0f0 backs.970719.o.parse
+settype backs.970719.o.parse 0f0
+
+copy backs.970719.o.prepr,0f0 backs.970719.o.prepr
+settype backs.970719.o.prepr 0f0
+
+copy backs.970719.o.struct,0f0 backs.970719.o.struct
+settype backs.970719.o.struct 0f0
+
+copy backs.970719.o.expr,0f0 backs.970719.o.expr
+settype backs.970719.o.expr 0f0
+
+copy backs.970719.o.aout,ff8 backs.970719.o.aout
+settype backs.970719.o.aout ff8
+
+copy backs.970719.o.error,0f0 backs.970719.o.error
+settype backs.970719.o.error 0f0
+
+copy backs.970719.h.macro,0fc backs.970719.h.macro
+settype backs.970719.h.macro 0fc
+
+copy backs.970719.h.exprtype,0fc backs.970719.h.exprtype
+settype backs.970719.h.exprtype 0fc
+
+copy backs.970719.h.struct,0fc backs.970719.h.struct
+settype backs.970719.h.struct 0fc
+
+copy backs.970719.h.error,0fc backs.970719.h.error
+settype backs.970719.h.error 0fc
+
+copy backs.970719.h.prepr,0fc backs.970719.h.prepr
+settype backs.970719.h.prepr 0fc
+
+copy backs.970719.h.expr,0fc backs.970719.h.expr
+settype backs.970719.h.expr 0fc
+
+copy backs.970719.h.types,0fc backs.970719.h.types
+settype backs.970719.h.types 0fc
+
+copy backs.970719.h.tokens,0fc backs.970719.h.tokens
+settype backs.970719.h.tokens 0fc
+
+copy backs.970719.h.strings,0fc backs.970719.h.strings
+settype backs.970719.h.strings 0fc
+
+copy backs.970719.h.tree,0fc backs.970719.h.tree
+settype backs.970719.h.tree 0fc
+
+copy backs.970719.h.malloc,0fc backs.970719.h.malloc
+settype backs.970719.h.malloc 0fc
+
+copy backs.970719.h.parse,0fc backs.970719.h.parse
+settype backs.970719.h.parse 0fc
+
+copy backs.970719.run,feb backs.970719.run
+settype backs.970719.run feb
+
+copy backs.970719.c.macro,0fc backs.970719.c.macro
+settype backs.970719.c.macro 0fc
+
+copy backs.970719.c.exprtype,0fc backs.970719.c.exprtype
+settype backs.970719.c.exprtype 0fc
+
+copy backs.970719.c.struct,0fc backs.970719.c.struct
+settype backs.970719.c.struct 0fc
+
+copy backs.970719.c.error,0fc backs.970719.c.error
+settype backs.970719.c.error 0fc
+
+copy backs.970719.c.prepr,0fc backs.970719.c.prepr
+settype backs.970719.c.prepr 0fc
+
+copy backs.970719.c.expr,0fc backs.970719.c.expr
+settype backs.970719.c.expr 0fc
+
+copy backs.970719.c.typemod,0fc backs.970719.c.typemod
+settype backs.970719.c.typemod 0fc
+
+copy backs.970719.c.tokens,0fc backs.970719.c.tokens
+settype backs.970719.c.tokens 0fc
+
+copy backs.970719.c.strings,0fc backs.970719.c.strings
+settype backs.970719.c.strings 0fc
+
+copy backs.970719.c.tree,0fc backs.970719.c.tree
+settype backs.970719.c.tree 0fc
+
+copy backs.970719.c.pragma,0fc backs.970719.c.pragma
+settype backs.970719.c.pragma 0fc
+
+copy backs.970719.c.parse,0fc backs.970719.c.parse
+settype backs.970719.c.parse 0fc
+
+copy backs.970719.c.declartion,0fc backs.970719.c.declartion
+settype backs.970719.c.declartion 0fc
+
+copy backs.951007.WimpStuff.o.RunAsb,0f0 backs.951007.WimpStuff.o.RunAsb
+settype backs.951007.WimpStuff.o.RunAsb 0f0
+
+copy backs.951007.WimpStuff.o.main,0f0 backs.951007.WimpStuff.o.main
+settype backs.951007.WimpStuff.o.main 0f0
+
+copy backs.951007.WimpStuff.o.aout,ff8 backs.951007.WimpStuff.o.aout
+settype backs.951007.WimpStuff.o.aout ff8
+
+copy backs.951007.WimpStuff.c.main,0fc backs.951007.WimpStuff.c.main
+settype backs.951007.WimpStuff.c.main 0fc
+
+copy backs.951007.h.macro,0fc backs.951007.h.macro
+settype backs.951007.h.macro 0fc
+
+copy backs.951007.h.struct,0fc backs.951007.h.struct
+settype backs.951007.h.struct 0fc
+
+copy backs.951007.h.error,0fc backs.951007.h.error
+settype backs.951007.h.error 0fc
+
+copy backs.951007.h.prepr,0fc backs.951007.h.prepr
+settype backs.951007.h.prepr 0fc
+
+copy backs.951007.h.expr,0fc backs.951007.h.expr
+settype backs.951007.h.expr 0fc
+
+copy backs.951007.h.types,0fc backs.951007.h.types
+settype backs.951007.h.types 0fc
+
+copy backs.951007.h.tokens,0fc backs.951007.h.tokens
+settype backs.951007.h.tokens 0fc
+
+copy backs.951007.h.strings,0fc backs.951007.h.strings
+settype backs.951007.h.strings 0fc
+
+copy backs.951007.h.tree,0fc backs.951007.h.tree
+settype backs.951007.h.tree 0fc
+
+copy backs.951007.h.malloc,0fc backs.951007.h.malloc
+settype backs.951007.h.malloc 0fc
+
+copy backs.951007.h.parse,0fc backs.951007.h.parse
+settype backs.951007.h.parse 0fc
+
+copy backs.951007.c.macro,c0d backs.951007.c.macro
+settype backs.951007.c.macro c0d
+
+copy backs.951007.c.struct,0fc backs.951007.c.struct
+settype backs.951007.c.struct 0fc
+
+copy backs.951007.c.error,0fc backs.951007.c.error
+settype backs.951007.c.error 0fc
+
+copy backs.951007.c.tree,c0d backs.951007.c.tree
+settype backs.951007.c.tree c0d
+
+copy backs.951007.c.prepr,c0d backs.951007.c.prepr
+settype backs.951007.c.prepr c0d
+
+copy backs.951007.c.typemod,0fc backs.951007.c.typemod
+settype backs.951007.c.typemod 0fc
+
+copy backs.951007.c.strings,c0d backs.951007.c.strings
+settype backs.951007.c.strings c0d
+
+copy backs.951007.c.main,0fc backs.951007.c.main
+settype backs.951007.c.main 0fc
+
+copy backs.951007.c.tokens,c0d backs.951007.c.tokens
+settype backs.951007.c.tokens c0d
+
+copy backs.951007.c.expr,c0d backs.951007.c.expr
+settype backs.951007.c.expr c0d
+
+copy backs.951007.c.pragma,0fc backs.951007.c.pragma
+settype backs.951007.c.pragma 0fc
+
+copy backs.951007.c.parse,0fc backs.951007.c.parse
+settype backs.951007.c.parse 0fc
+
+copy backs.951007.c.declartion,0fc backs.951007.c.declartion
+settype backs.951007.c.declartion 0fc
+
+copy backs.970711.o.strings,0f0 backs.970711.o.strings
+settype backs.970711.o.strings 0f0
+
+copy backs.970711.o.RunAsb,0f0 backs.970711.o.RunAsb
+settype backs.970711.o.RunAsb 0f0
+
+copy backs.970711.o.tokens,0f0 backs.970711.o.tokens
+settype backs.970711.o.tokens 0f0
+
+copy backs.970711.o.macro,0f0 backs.970711.o.macro
+settype backs.970711.o.macro 0f0
+
+copy backs.970711.o.typemod,0f0 backs.970711.o.typemod
+settype backs.970711.o.typemod 0f0
+
+copy backs.970711.o.tree,0f0 backs.970711.o.tree
+settype backs.970711.o.tree 0f0
+
+copy backs.970711.o.run,feb backs.970711.o.run
+settype backs.970711.o.run feb
+
+copy backs.970711.o.exprtype,0f0 backs.970711.o.exprtype
+settype backs.970711.o.exprtype 0f0
+
+copy backs.970711.o.pragma,0f0 backs.970711.o.pragma
+settype backs.970711.o.pragma 0f0
+
+copy backs.970711.o.declartion,0f0 backs.970711.o.declartion
+settype backs.970711.o.declartion 0f0
+
+copy backs.970711.o.parse,0f0 backs.970711.o.parse
+settype backs.970711.o.parse 0f0
+
+copy backs.970711.o.prepr,0f0 backs.970711.o.prepr
+settype backs.970711.o.prepr 0f0
+
+copy backs.970711.o.struct,0f0 backs.970711.o.struct
+settype backs.970711.o.struct 0f0
+
+copy backs.970711.o.expr,0f0 backs.970711.o.expr
+settype backs.970711.o.expr 0f0
+
+copy backs.970711.o.aout,ff8 backs.970711.o.aout
+settype backs.970711.o.aout ff8
+
+copy backs.970711.o.error,0f0 backs.970711.o.error
+settype backs.970711.o.error 0f0
+
+copy backs.970711.WimpStuff.o.RunAsb,0f0 backs.970711.WimpStuff.o.RunAsb
+settype backs.970711.WimpStuff.o.RunAsb 0f0
+
+copy backs.970711.WimpStuff.o.main,0f0 backs.970711.WimpStuff.o.main
+settype backs.970711.WimpStuff.o.main 0f0
+
+copy backs.970711.WimpStuff.o.aout,ff8 backs.970711.WimpStuff.o.aout
+settype backs.970711.WimpStuff.o.aout ff8
+
+copy backs.970711.WimpStuff.c.main,0fc backs.970711.WimpStuff.c.main
+settype backs.970711.WimpStuff.c.main 0fc
+
+copy backs.970711.h.macro,0fc backs.970711.h.macro
+settype backs.970711.h.macro 0fc
+
+copy backs.970711.h.exprtype,0fc backs.970711.h.exprtype
+settype backs.970711.h.exprtype 0fc
+
+copy backs.970711.h.struct,0fc backs.970711.h.struct
+settype backs.970711.h.struct 0fc
+
+copy backs.970711.h.error,0fc backs.970711.h.error
+settype backs.970711.h.error 0fc
+
+copy backs.970711.h.prepr,0fc backs.970711.h.prepr
+settype backs.970711.h.prepr 0fc
+
+copy backs.970711.h.expr,0fc backs.970711.h.expr
+settype backs.970711.h.expr 0fc
+
+copy backs.970711.h.types,0fc backs.970711.h.types
+settype backs.970711.h.types 0fc
+
+copy backs.970711.h.tokens,0fc backs.970711.h.tokens
+settype backs.970711.h.tokens 0fc
+
+copy backs.970711.h.strings,0fc backs.970711.h.strings
+settype backs.970711.h.strings 0fc
+
+copy backs.970711.h.tree,0fc backs.970711.h.tree
+settype backs.970711.h.tree 0fc
+
+copy backs.970711.h.malloc,0fc backs.970711.h.malloc
+settype backs.970711.h.malloc 0fc
+
+copy backs.970711.h.parse,0fc backs.970711.h.parse
+settype backs.970711.h.parse 0fc
+
+copy backs.970711.c.macro,0fc backs.970711.c.macro
+settype backs.970711.c.macro 0fc
+
+copy backs.970711.c.exprtype,0fc backs.970711.c.exprtype
+settype backs.970711.c.exprtype 0fc
+
+copy backs.970711.c.struct,0fc backs.970711.c.struct
+settype backs.970711.c.struct 0fc
+
+copy backs.970711.c.error,0fc backs.970711.c.error
+settype backs.970711.c.error 0fc
+
+copy backs.970711.c.prepr,0fc backs.970711.c.prepr
+settype backs.970711.c.prepr 0fc
+
+copy backs.970711.c.expr,0fc backs.970711.c.expr
+settype backs.970711.c.expr 0fc
+
+copy backs.970711.c.typemod,0fc backs.970711.c.typemod
+settype backs.970711.c.typemod 0fc
+
+copy backs.970711.c.tokens,0fc backs.970711.c.tokens
+settype backs.970711.c.tokens 0fc
+
+copy backs.970711.c.strings,0fc backs.970711.c.strings
+settype backs.970711.c.strings 0fc
+
+copy backs.970711.c.tree,0fc backs.970711.c.tree
+settype backs.970711.c.tree 0fc
+
+copy backs.970711.c.pragma,0fc backs.970711.c.pragma
+settype backs.970711.c.pragma 0fc
+
+copy backs.970711.c.parse,0fc backs.970711.c.parse
+settype backs.970711.c.parse 0fc
+
+copy backs.970711.c.declartion,0fc backs.970711.c.declartion
+settype backs.970711.c.declartion 0fc
+
+copy QuadPrint,ffb QuadPrint
+settype QuadPrint ffb
+
+copy textfile,0fc textfile
+settype textfile 0fc
+
+copy !OverC.o.RunAsb,0f0 !OverC.o.RunAsb
+settype !OverC.o.RunAsb 0f0
+
+copy !OverC.o.Linker,ff8 !OverC.o.Linker
+settype !OverC.o.Linker ff8
+
+copy !OverC.!Run,ffb !OverC.!Run
+settype !OverC.!Run ffb
+
+copy !OverC.!Sprites,ff9 !OverC.!Sprites
+settype !OverC.!Sprites ff9
+
+copy !OverC.HalfCompil,ffb !OverC.HalfCompil
+settype !OverC.HalfCompil ffb
+
+copy !OverC.h.malloc,0fc !OverC.h.malloc
+settype !OverC.h.malloc 0fc
+
+copy !OverC.LinkerNYg,ff8 !OverC.LinkerNYg
+settype !OverC.LinkerNYg ff8
+
+copy !OverC.c.Linker,0fc !OverC.c.Linker
+settype !OverC.c.Linker 0fc
+
+copy !OverC.c.LinkerNew,c0d !OverC.c.LinkerNew
+settype !OverC.c.LinkerNew c0d
+
+copy !OverC.c.LinkerNYg,0fc !OverC.c.LinkerNYg
+settype !OverC.c.LinkerNYg 0fc
+
+copy !OverC.c.LinkerOld,c0d !OverC.c.LinkerOld
+settype !OverC.c.LinkerOld c0d
+
+copy !OverC.Linker,ff8 !OverC.Linker
+settype !OverC.Linker ff8
+
+copy !OverC.Sarah,ffa !OverC.Sarah
+settype !OverC.Sarah ffa
+
+copy !OverC.a.RunAsbBas,ffb !OverC.a.RunAsbBas
+settype !OverC.a.RunAsbBas ffb
+
+copy !OverC.a.RunAsb,0fc !OverC.a.RunAsb
+settype !OverC.a.RunAsb 0fc
+
+copy !OverC.HalfCompiC,c0d !OverC.HalfCompiC
+settype !OverC.HalfCompiC c0d
+
+copy !OverC.HalfCompNP,ffb !OverC.HalfCompNP
+settype !OverC.HalfCompNP ffb
+
+copy !OverC.!Boot,feb !OverC.!Boot
+settype !OverC.!Boot feb
+

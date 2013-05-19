@@ -1,0 +1,25 @@
+Report:  Started this version of C about 9th May.
+
+Preprocessor finished 21st June. est 1..2 manweeks
+ Barring #pragma extensions. Probably extract do_pragma() for quick fiddling.
+
+Tokeniser 22&3 June, about 6 man-hours
+
+Expression parser
+
+Type parser
+
+Function parser
+
+Code generator
+  i. To Basic assembler
+ ii. To machinecode
+
+New linker
+ -- to giant .o files and reading 'top' .h files for external linkage
+
+Peephole optimiser
+
+Code shuffling
+ -- Instead of writing code straight out, arrange it in blocks, as if indexed
+    a la Dragon Book, with liveness details attached.

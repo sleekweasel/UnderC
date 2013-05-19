@@ -1,0 +1,20 @@
+/*
+ *  Prepr.h - Preprocessing thing. Returns preproc'd lines.
+ */
+
+extern int channel; /* For testing eof. */
+
+extern int incdepth; /* Depth of current include, for if.c. */
+
+extern int   fline;  /* Current file line number. */
+extern char *fname,  /* Current file name.        */
+            *basedir;/* Base dir of initial file  */
+
+extern char *giveline ( void );		/* For macro.c only */
+extern char *skiphead ( char * );	/* For macro.c only */
+extern char *steptoken( char * );	/* For macro.c only */
+
+extern char *nextline( void );		/* For tokens.c only */
+
+extern void do_include(char * , char * ); /* For main.c only */
+

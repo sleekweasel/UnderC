@@ -1,0 +1,123 @@
+
+##	types.h
+##
+##	declartion	- parses Int, Void, Const, Extern etc.
+##	typemod		- parses *, Const, Volatile, (), [] etc.
+##	struct		- parses struct, union and enum, also inserts them into st-tree
+##
+##	Types uses Tnode. IDnode includes Tnode for id-type and st-type.
+##
+##	->is			->value						->type. 'Pointer to' or flags
+##
+## -- TNODES -- Modifiers (def'd types.h)
+##
+##	OpenArray		Array bound or 0			base type
+##	Star			(unused)					base type
+##	Mod				(unused)					base type
+##	Function		Pointer to param STnodes	base type (return type)
+##
+## -- IDNODES -- User types (def'd parse.h)
+##
+##	Typedef			(unused)					base type
+##	Extern,Static,
+##	Auto,Register	Initialiser (unspecified)	base type
+##
+##	Struct			Pointer to (struct *)		struct structure (STnodes)
+##	Union			Pointer to (union *)		union structure  (STnodes)
+##	Enum			enum id list				NULL
+##
+##	Star and Mod are or-ed with their const_Q, volatile_Q modifiers.
+##
+##	Enum | Const_Q is an enum identifier in id_ space. Enum is a tag.
+##
+##	ArrayOpen implies ArrayOpen | Const_Q, but its basetype may/not be const.
+##	Function implies Function | Const_Q, but its basetype shall not be const.
+##
+##	Function ->value==Void if (void), and ==Ellisis if (). Non-empty parameters
+##	stored in in STnodes, linked by ->next, which may also be Ellipsis or 0.
+##
+##	Typedef, struct and union supposedly have a plain pointers to themselves
+##	in ->value. It may also be worth making an actual type char_star.
+##
+##	The types Star, Mod, OpenArray and Function are never named/shared.
+##	The other types are always 'shared' to the id-tree or st-tree.
+##
+##	Anonymous type nodes are linked into the tree as "" for easy destruction.
+##	eg in struct { char a; } *fred, jim;  the struct is shared by fred and jim.
+##	the struct is linked into the struct tree, fred and jim to the id tree as
+##				""		: {"a",0,Char}
+##	'fred'	as	"fred"	: *,struct""	(note, this '*' is unshared.)
+##	'jim'	as	"jim"	: struct""
+##
+##	Names of "" are always static, never free()able.
+##
+##	The trees can be killed by going through twice:
+##		Kill modifier-streams (Star, Mod, Function, OpenArray),
+##		Kill primary nodes (others).
+
+typedef struct tnode Tnode;
+struct tnode {
+				int		 MAGIC;		/* Magic cookie */
+				int		 is;		/* Usage identifier */
+				Tnode	*type;		/* Type handle */
+				int		 value;		/* Initialiser or parameter */
+			 };
+
+##	ISSUE:
+##	Using linked lists for types is perhaps wasteful. Types could be formed into
+##	some form of (bit)string. Perhaps { char *modifiers; Tnode *basetype; }
+##	with modifiers: "c*[XXXX]v*(XXXX)". Then again, code may prove less
+##	efficient.
+##	Already it is possible to generate Star/Mod modifiers with no value field.
+
+##---------------------------------------------------------------------
+extern int TNODE;
+
+extern Tnode *new_tnode();
+extern int free_tnode( Tnode *kill );
+##---------------------------------------------------------------------
+## Declaration section - Only basetypes. Structs in struct.h
+
+##		Returns true if name is a typedef identifier
+extern int is_typedef(char *name);
+
+##		Returns true if peektoken(n) indicates a typecast
+extern int istype( int n );
+
+##		Returns type of this node given node's data and . or -> for fields.
+##		It also kills off (recycles) the source typedata before return.
+##		 (->left can be zero during Comma (argument lists))
+extern Tnode *Etype( Enode * );
+
+##	Parse a decl-spec or a spec-qual. (Basic type, typedef struct etc)
+##	idtree = 0 for now, *decl_spec=0 for any storage specs,
+##								  0xE000 for global storage only
+##								  0xF000 for spec-qual (no storage specs)
+## These operate on id_local and st_local.
+
+extern Tnode *decl_specs ( int * decl_spec );
+extern Tnode *spec_qual  ( void );
+
+##--------------------------------------------------------------------
+## Type mods
+
+##		Takes a base type, parses type modifiers on top
+extern Tnode *declarator( char **identifier, Tnode *basetype );
+
+##		Returns type for parse of typecast or sizeof().  <typename>
+extern Tnode *typename( void );
+
+##		Returns size of this type
+extern int typsize( Tnode *tn ); /* size_of */
+
+##		Frees a list of typemodifiers, ie (Star|Mod|Function|OpenArray)*
+extern void typfree( Tnode * ); /* free_typemods */
+
+##		Duplicate a list of typemodifiers, including STnodes off functions
+extern Tnode *typdup( Tnode * );
+
+##		Return the promoted version of the two given (qualified) type-tokens
+extern int typpromo( int tt1, int tt2 );
+
+##		Compare two lists of typemodifiers, including STnodes off functions
+extern int typcmp( Tnode *base, Tnode *checkme, int strict );  /* typematch */

@@ -1,0 +1,47 @@
+/* Test for types. */
+
+#pragma tokenshow off
+#pragma tokenkill off
+
+#pragma dumptrace off
+
+#pragma macrodef  off
+#pragma iflines   off
+#pragma include   off
+
+#pragma trigraphs off
+#pragma strongEOF on
+#pragma nestcomments on
+
+#pragma doing @@:@ABC_
+
+## @ is low level decl_specs
+## A is higher level decl_specs
+## B is type modifiers
+## C is type constructors
+## _ is token-number show
+
+typedef char *string;
+string starr[0x17];
+string stfn();
+register extern const volatile int long reg_c_v_long;
+auto char float volatile aut_chflt_vol->foo;
+static long const float volatile * const *(*stat_c_ptr_c_v_long[10])[15];
+static static int long unsigned signed unsigned char double sta_ulong;
+volatile static IDENT struct { int intt char charr long long} signed stat_vol_stru;
+static int * p_int;
+static int const * p_cint;
+static int * const cp_int;
+
+auto enum gk {alpha, beta, gamma=5, delta, epsilon=10,phi,,} *ay, bee, **see, *de[3];
+
+struct tree
+	{
+		struct tree *left, *right;
+		char *name;
+		union U_number {
+			double real;
+			struct S_complex { float real, imaginary; } complex;
+		} complex;
+	}
+	*root;

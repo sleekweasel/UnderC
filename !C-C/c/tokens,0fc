@@ -1,0 +1,327 @@
+
+##  tokens.c -- Gives next token, also accepts some backtokens */
+
+#include "malloc.h"
+#include "strings.h"
+#include "error.h"
+#include "prepr.h"       
+#include "tokens.h"
+
+extern char keywords[][9]; /* Extern from error */
+
+extern int tokenshow_flag=0,
+           tokenkill_flag=0;
+
+static char  *line=0, *lptr=0;
+
+static Token **backtok=0;
+
+static int backix=0, backixtop=0,
+           kwx[] ={1,2,3,7,10,13,15,0,16,0,0,18,0,0,0,0,0,19,21,27,28,30,32};
+
+##  Keyword index, a,b,c,d,e... to index of first keyword with that letter
+
+##-----------------------------------------------------
+extern int TOKEN='TOKN';
+extern Token *new_token() {
+	Token *new; new=malloc(sizeof(Token));  /* Only direct allocator */
+	new->MAGIC=TOKEN;
+	return new;
+}
+extern int free_token( Token *kill ) {
+	if ( !kill ) return error(Failed,"free_token given NULL");
+	if ( kill->MAGIC!=TOKEN ) return error(Failed,"free_token given !TOKEN");
+	free(kill);
+}
+##----------------------------------------------------------------------------
+
+static int chrstr( void ) {  /* at start of simple char */
+  int nu, ch;
+  if (*lptr!='\\') return *lptr++;
+  if ( nu=strchr(ch="ntvbrfa\\?'\"",*++lptr) ) {
+    lptr++; return "\12\11\12\10\15\14\7\\?'\""[nu-ch];
+  }
+  if ( '0'<=*lptr && *lptr<='7' ) {
+    ch=*lptr++-'0'; nu=1;
+    while ( nu++<3 && '0'<=*lptr && *lptr<='7' ) ch = ch*8 + *lptr++-'0';
+    return ch;
+  }
+  if ( *lptr=='x' ) {
+    char *hex, *pce; hex="0123456789abcdef";
+    lptr++; ch=0;
+    while ( pce=strchr(hex, *lptr|32) ) ch = ch*8 + pce-hex, lptr++;
+    return ch;
+  }
+  error(Ansi,"Undefined string-escape '\\%c' read as plain character",*lptr);
+  return *lptr++;
+}
+
+/*----------------------------------------------------------------------------*/
+
+static int charstr( void ) { /* after ', return the (multichar) character, *
+                              *  then eat '                                */
+  int ret, shift;
+  if (*lptr=='\'') { error(Error,"Found empty character-constant");
+                     lptr++; return 0; }
+  shift=0;
+  while ( shift<32 && *lptr!='\'' ) ret= ( ret & (-1>>(32-shift)) )
+                                          | (chrstr()<<shift),
+                                    shift+=8;
+
+  if (*lptr!='\'') error(Alert,"Excess characters in character-constant lost");
+  while (*lptr!='\'') if (*lptr++=='\\') lptr++; lptr++;
+  return ret;
+}
+
+char *readstr(int size) {  /* Read lengthed (long) string and eat final " */
+  char *lpt, *rtn; int *len; lpt=lptr;
+  while ( *lpt!='"' ) if (*lpt++=='\\') lpt++;
+  len=rtn=malloc( sizeof(int) + size*(lpt-lptr));
+  *len=0;
+  if ( size==4 ) {
+    int  *pt; pt = rtn + sizeof(int) ;
+    while ( *lptr!='"' ) *pt++=chrstr(), ++*len;
+  } else {
+    char *pt; pt = rtn + sizeof(int) ;
+    while ( *lptr!='"' ) *pt++=chrstr(), ++*len;
+  }
+  lptr++;
+  return rtn;
+}
+
+##
+##      if ( tok->is==Ident    ) printf(" \\(%s)" ,tok->data); else
+##      if ( tok->is==IntConst ) printf(" Z(%s)"  ,tok->data); else
+##      if ( tok->is==RealConst) printf(" R(%s)"  ,tok->data); else
+##      if ( tok->is==CharConst) printf(" '0x%x'" ,tok->data); else
+##      if ( tok->is==String   ) printf(" \"%S\"" ,tok->data); else
+##      if ( tok->is==WideChar ) printf(" L'0x%x'",tok->data); else
+##      if ( tok->is==WideStr  ) printf(" L\"%W\"",tok->data); else
+##      if ( tok->is<KeyWords  ) sys("OS_Write0",symbols[tok->is]);
+##                     else sys("OS_Write0",keywords[tok->is-KeyWords]);
+##
+
+##----------------------------------------------------------------------------
+## Internal token handling
+
+static void freetoken( Token *tok ) { /* free token object */
+  if (tokenkill_flag) error(Doing,"freetoken(%T)",tok);
+  if ( tok->is<=WideStr   && tok->is!=NullToken &&
+       tok->is!=CharConst && tok->is!=WideChar ) free(tok->data);
+  free(tok);
+}
+
+static int backtoken( Token *rts ) {  /* Queue token for next time, */
+  if ( tokenshow_flag ) error(Doing,"backtoken(%T)",rts);
+  if ( ++backix>backixtop )
+  {
+  	if ( !backixtop ) backtok=malloc(4);
+  	backtok=realloc(backtok, backix*4/*sizeof(Token*)*/), backixtop=backix;
+  }
+  backtok[backix-1]=rts;
+  return 1;
+}
+
+static Token *nexttoken( void ) {
+
+  Token *tok;
+
+  if ( backix!=0 ) {
+    if (tokenshow_flag) error(Doing, "nexttoken()==%T (from queue)",
+                                     backtok[backix-1]);
+    return backtok[--backix];
+  }
+
+  tok=new_token(); tok->is=-1; tok->data=0;
+  do {
+    while ( line==0 || *lptr==0 ) {
+      free(line); lptr=line=nextline();
+      if ( *lptr==0 ) { tok->is=eof; return tok; }
+      while (*lptr && *lptr<=' ') lptr++;
+    }
+
+/* Do (long) strings and don't concatenate them yet */
+
+    if ( *lptr=='"' || ( *lptr=='L' && *(lptr+2)=='"' ) ) {
+      Token *nxt;
+      if (*lptr++=='"') {
+        tok->is=String;  tok->data=readstr( sizeof(char) );
+      } else {
+        lptr+=2;
+        tok->is=WideStr; tok->data=readstr( sizeof(int) );
+      }
+      while ( *lptr && *lptr<=' ' ) lptr++;
+      nxt=nexttoken(0);
+      if ( nxt->is!=WideStr && nxt->is!=String ) backtoken(nxt);
+      else {
+        int *i, *o, to, from;
+        if ( nxt->is!=tok->is )
+              error(Ansi,"Concatenation of wide and normal strings");
+        i=nxt->data; o=tok->data; to=*o; from=0;
+        (*o)+=*i; /* Length is length of char-data only */
+        if ( tok->is==String ) o=tok->data=realloc(o,4+*o);
+                          else o=tok->data=realloc(o,4+4**o);
+        while ( to<*o ) {
+          int data;
+          if ( nxt->is==WideStr ) {
+            int *sr;  sr=nxt->data; data=sr[1+from++];
+          } else {
+            char *sr; sr=nxt->data; data=sr[4+from++];
+          }
+          if ( tok->is==WideStr ) {
+            int *sr;  sr=tok->data; sr[1+to++]=data;
+          } else {
+            char *sr; sr=tok->data; sr[4+to++]=data;
+          }
+        }
+        freetoken(nxt);
+      }
+    } else
+
+/* Do (long) char consts */
+
+    if ( *lptr=='\'' || ( *lptr=='L' && *(lptr+2)=='\'' ) ) {
+      if ( *lptr++=='\'' ) tok->is=CharConst; else tok->is=WideChar, lptr+=2;
+      tok->data=charstr();
+      if ( tok->is==CharConst && tok->data>255 )
+        error(Ansi,"Character constant only defined for single character");
+    } else
+
+/* Do identifiers */
+
+    if ( isalpha(*lptr) ) {
+      char *lpt; lpt=lptr; tok->is=Ident;
+      while ( isalpha(*lpt) || isdigit(*lpt) || *lpt=='`' ) lpt++; *lpt=0;
+      if ( 'a'<=*lptr && *lptr<='w' ) {
+        if ( kwx[*lptr-'a'] ) {
+          int ix; char *kd;
+          ix=kwx[*lptr-'a']; kd=keywords[ix];
+          while ( *kd==*lptr && tok->is==Ident )
+            if ( ! strcmp( (kd=keywords[ix++]) ,lptr) ) tok->is=ix+KeyWords-1;
+          if ( tok->is==Ident ) tok->data=strdup(lptr);
+          if ( tok->is==_SIZE_OF_ ) tok->is=SizeOf;
+        } else tok->data=strdup(lptr);
+      } else tok->data=strdup(lptr);
+      *lpt=32; lptr=lpt;
+      if ( tok->is==Ident ) {
+        char *from, *to; to=from=tok->data;
+        while ( *from ) if (*from!='`') *to++=*from++; else from++;
+        *to=0;
+      }
+    } else
+
+/* Do integers/reals */
+
+    if ( isdigit(*lptr) || ( *lptr=='.' && isdigit(*(lptr+1)) ) ) {
+      char *lpt, oct, hex; lpt=lptr; oct=*lpt=='0'; hex=oct * *(1+lpt);
+      tok->is=IntConst;  /* IntConst until it can't be */
+      if ( (hex|32)=='x' ) for (lpt+=2; isxdigit(*lpt); lpt++);
+ else if ( oct ) for (lpt++; '0'<=*lpt && *lpt<='7'; lpt++);
+ else {
+        while ( isdigit(*lpt) ) lpt++;
+        if (*lpt=='.' || *lpt=='e' || *lpt=='E') tok->is=RealConst;
+                      /* Float must have one of these */
+      }
+/* Have read integer part and determined floatiness */
+      if ( tok->is == IntConst ) {
+        if ( *lpt=='u' || *lpt=='U' ) lpt++;
+        if ( *lpt=='l' || *lpt=='L' ) lpt++;
+        if ( *lpt!=' ' ) error(Alert,"Ignoring extra data after integer");
+      } else {
+        if (*lpt=='.') while ( isdigit(*++lpt) );
+        if (*lpt=='e' || *lpt=='E') { lpt++;
+          if (*lpt=='+' || *lpt=='-') lpt++;
+          while ( isdigit(*lpt) ) lpt++;
+        }
+        if ( strchr("fFlL",*lpt) ) lpt++;
+        else if (*lpt!=' ') error(Alert,"Ignoring extra data after float");
+      }
+/* Copy data */
+      oct=*lpt; *lpt=0; tok->data=strdup(lptr); *lpt=oct;
+      lptr=lpt; while ( *lptr++!=' ' );
+    } else {
+/*
+ *  Do symbols -- Note, this section is closely tied to the token enumeration.
+ */
+      char *ptr, *pt;
+      if ( *(lptr+1)==' ' ) {
+/* Single-char characters: OpenBracket CloseBracket OpenArray CloseArray   *
+ *   Dot BitNot LogNot Times Div Mod Add Take LessThan GreaterThan BitAnd   *
+ *   BitEor BitOr Query Colon Assign Comma SemiColon OpenCurly CloseCurly  */
+        ptr="()[]x.xxxxxxxxxx~!x*/%+-xx<>xxxx&^|xx?:=xxxxxxxxxx,;{}";
+        pt=strchr(ptr,*lptr++);
+        if ( pt ) tok->is=OpenBracket+(pt-ptr);
+      } else
+      if ( *(lptr+1)=='=' ) {
+/* Assignment ops: LessEqual GreaterEqual IsEqual NotEqual TimesEqual    *
+ *   DivEqual ModEqual AddEqual TakeEqual AndEqual EorEqual OrEqual      */
+        ptr="<>=!xxxxxxxx*/%+-xx&^|";
+        tok->is=LessEqual+(strchr(ptr,*lptr)-ptr); lptr+=2;
+      } else
+      if ( *(lptr+1)==*lptr ) {
+/* Doublechar ops: Ellipsis PostInc PostDec LeftShift RightShift LogAnd LogOr *
+ *    LeftShiftEqual RightShiftEqual                                          */
+        if (*lptr=='.') tok->is=Ellipsis; /* All tokens space sep'd by now */
+        if (*lptr=='+') tok->is=PostInc;
+        if (*lptr=='-') tok->is=PostDec;
+        if (*lptr=='<') tok->is=(*(lptr+2)=='=')?LeftShiftEqual:LeftShift;
+        if (*lptr=='>') tok->is=(*(lptr+2)=='=')?RightShiftEqual:RightShift;
+        if (*lptr=='&') tok->is=LogAnd;
+        if (*lptr=='|') tok->is=LogOr;
+        lptr+=2; if ( *lptr!=' ' ) lptr++;
+      } else
+      if ( *lptr=='-' && *(lptr+1)=='>' ) tok->is=Arrow, lptr+=2;
+      else error(Alert,"Unrecognised character '%c' ignored",*lptr++);
+    }
+    while (*lptr && *lptr<=' ') lptr++;
+  } while ( tok->is==-1 )
+
+  if (tokenshow_flag) error(Doing,"nexttoken()==%T",tok);
+
+  return tok;
+}
+
+##----------------------------------------------------------------------------
+##	These will be rationalised to work directly with the backtoken stack
+
+extern Token *seetoken() {
+	Token *ret;
+	backtoken(ret=nexttoken());
+	error(Doing,"T:seetoken() = %T",ret);
+	return ret;
+}
+
+extern Token *taketoken() {
+	Token *ret;
+	freetoken(nexttoken());
+	backtoken(ret=nexttoken());
+	error(Doing,"T:taketoken() = %T",ret);
+	return ret;
+}
+
+extern Token *peektoken( int n ) {
+	Token *a, *b;
+	if ( 0>n || n>1  ) error(Abort,"Only single token lookahead supported.");
+	a=nexttoken(); b=nexttoken();
+	backtoken(b); backtoken(a);
+	a=(n?b:a);
+	error(Doing,"T:peektoken(%d) = %T",n,a);
+	return a;
+}
+
+extern int eatatoken(int tokval, char *errstr /*, ... */ ) {
+	Token *tok; int ret;
+	tok=nexttoken(0);
+	if ( ret = (tok->is==tokval) ) {
+		error(Doing,"T:eatatoken() ate %T",tok);
+		freetoken(tok);
+	}
+	else {
+		error(Doing,"T:eatatoken() didn't get a %t",tokval);
+		backtoken(tok);
+		if ( *errstr ) verror(Error,&errstr);
+	}
+	return ret;
+}
+
+##----------------------------------------------------------------------------

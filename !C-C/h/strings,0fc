@@ -1,0 +1,60 @@
+
+##  Strings stdlib.
+
+## Return a copy of s
+extern char *strdup(char *cs);
+
+## copy ct to s incl \0, return s
+extern char *strcpy(char *s,char *ct);
+
+## copy max n chars of ct to s, return s
+extern char *strncpy(char *s, char *ct, int n) ;
+
+## concat ct to s incl \0, return s
+extern char *strcat(char *s, char *ct) ;
+
+## copy max n chars of ct to s, return s
+extern char *strncat(char *s, char *ct, int n) ;
+
+## return cs-ct
+extern int strcmp(char *cs, char *ct) ;
+
+## return cs-ct max n chars
+extern int strncmp(char *cs, char *ct, int n) ;
+
+## return pointer to first c in cs or null
+extern char *strchr(char *cs, char c) ;
+
+## return pointer to last c in cs or null
+extern char *strrchr(char *cs, char c) ;
+
+## return length of prefix in cs of chars in ct
+extern int strspn(char *cs, char *ct) ;
+
+## return length of prefix in cs of chars not in ct
+extern int strcspn(char *cs, char *ct) ;
+
+## return pointer to first char in ct in cs or NULL
+extern char *strpbrk(char *cs, char *ct) ;
+
+## return pointer to first string ct in cs or NULL
+extern char *strstr(char *cs, char *ct) ;
+
+## Return length of cs excl term \0
+extern int strlen(char *cs) ;
+
+##
+##  These two not defined.
+##
+
+## Return implementation def'd error for error number 'n'
+extern char *strerror(int n) ;
+
+## Search s for tokens delimited by chars in ct
+extern char *strtok(char *s, char *ct) ;
+
+extern void *memcpy(char *s,  char *ct, int n);
+extern void *memmove(char *s, char *ct, int n);
+extern int   memcmp(char *s,  char *ct, int n);
+extern void *memchr(char *cs, char  c,  int n);
+extern void *memset(char *s,  char  c,  int n);

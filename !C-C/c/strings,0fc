@@ -1,0 +1,136 @@
+/*
+ *  Strings stdlib.
+ */
+
+#include "malloc.h"
+#include "strings.h"
+
+extern int strlen(char *cs) { /* Return length of cs excl term \0 */
+  char *p;
+  if ( *(p=cs) ) while ( *++p );
+  return p-cs;
+}
+
+extern char *strdup(char *cs) { /* Return a copy of s */
+  char *nu; nu=malloc(strlen(cs)+1);
+  return nu?strcpy( nu, cs ):0;
+}
+
+extern char *strcpy(char *s,char *ct) { /* copy ct to s incl \0, return s */
+  char *c; c=s;
+  while ( *c++=*ct++ );
+  return s;
+}
+extern char *strncpy(char *s, char *ct, int n) { /* copy max n chars of ct
+                                                  * to s, return s */
+  char *c; c=s;
+  while ( n-- && *c++=*ct++ );
+  return s;
+}
+
+extern char *strcat(char *s, char *ct) { /* concat ct to s incl \0, return s */
+  char *c; c=s;
+  s+=strlen(s);
+  while ( *s++=*ct++ );
+  return c;
+}
+extern char *strncat(char *s, char *ct, int n) { /* copy max n chars of ct
+                                                  * to s, return s */
+  char *c; c=s;
+  s+=strlen(s);
+  while ( n-- && *s++=*ct++ );
+  return c;
+}
+
+extern int strcmp(char *cs, char *ct) { /* return cs-ct */
+  while ( *cs && *cs==*ct ) cs++, ct++;
+  return *cs-*ct;
+}
+extern int strncmp(char *cs, char *ct, int n) { /* return cs-ct max n chars */
+  while ( n-- && *cs && *cs==*ct ) cs++, ct++;
+  return *cs-*ct;
+}
+
+extern char *strchr(char *cs, char c) { /* return pointer to first c in cs
+                                         * or null */
+  while ( *cs && *cs!=c ) cs++;
+  if ( *cs ) return cs; else return 0;
+}
+extern char *strrchr(char *cs, char c) { /* return pointer to last c in cs
+                                          * or null */
+  char *last; last=0;
+  while ( *cs ) if ( *cs++==c ) last=cs-1;
+  return last;
+}
+
+extern int strspn(char *cs, char *ct) { /* return length of prefix in cs
+                                         * of chars in ct */
+  char *st, *ch; st=cs; ch=ct;
+  while ( *st && *ch ) if ( *ch++==*st ) st++, ch=ct;
+  return st-cs;
+}
+extern int strcspn(char *cs, char *ct) { /* return length of prefix in cs
+                                          * of chars not in ct */
+  char *st, *ch; st=cs; ch=ct;
+  while ( *st && *ch ) if ( *ch++!=*st ) st++, ch=ct;
+  return st-cs;
+}
+
+extern char *strpbrk(char *cs, char *ct) { /* return pointer to first char
+                                            * in ct in cs or NULL */
+  char *st; st=cs;
+  while ( *st ) {
+    char *ch; ch=ct;
+    while ( *ch ) if ( *ch++==*st ) return st;
+    st++;
+  }
+  return 0;
+}
+extern char *strstr(char *cs, char *ct) { /* return pointer to first string ct
+                                           * in cs or NULL */
+  if ( !*ct ) return cs;
+  while ( *cs ) if ( *cs++==*ct ) {
+    char *ts, *tt; ts=cs-1; tt=ct;
+    while ( *++tt==*++ts );
+    if ( !*tt ) return cs-1;
+  }
+  return 0;
+}
+
+extern char *strerror(int n) { /* Return implementation def'd error for error
+                                * number 'n' */
+}
+extern char *strtok(char *s, char *ct) { /* Search s for tokens delimited
+                                          * by chars in ct */
+ /* See page 250. need a static char and char*? */
+}
+
+extern void *memcpy(char *s,  char *ct, int n) { /* copy max n chars of ct
+                                                  * to s, return s */
+  char *c;
+  for ( c=s; n--; *s++=*ct++);
+  return c;
+};
+
+extern void *memmove(char *s, char *ct, int n) { /* Overlapping okay */
+  char *c;
+  if ( s<ct ) for ( c=s;   n--; *s++=*ct++); /* Copy beginning to end */
+         else for ( c=s+n; n--; *--s=*--ct); /* Copy end to start */
+  return c;
+};
+
+extern int memcmp(char *cs,  char *ct, int n) { /* return cs-ct max n chars */
+  while ( n-- && *cs++==*ct++ );
+  return *(cs-1)-*(ct-1);
+};
+
+extern void *memchr(char *cs, char  c,  int n) {
+  while ( n-- && *cs++!=c );
+  if ( *(cs-1)==c ) return cs-1; else return 0;
+};
+
+extern void *memset(char *s,  char c,  int n) {
+  char *ss; ss=s;
+  while ( n-- ) *ss++=c;
+  return s;
+};

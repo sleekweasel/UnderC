@@ -1,0 +1,34 @@
+
+##  Parse.h  -- Main compiler routine. (Parses function blocks and sets ids.)
+
+extern int IDNODE;
+typedef struct id_node IDnode;
+struct id_node {
+
+	Bnode	 id;		/* Name and tree block */
+	Tnode	 ty;		/* Type and use block */
+
+## Mark these id and ty in ID2T() and T2ID() 
+
+	int		 offset,	/* Positioning */
+			 size;		/* Size of item */
+};
+
+
+extern int CNODE;
+typedef struct command_node Cnode;
+struct command_node {
+	int		 is;
+	Cnode	*first, *second, *third, *fourth, *next;
+};
+
+
+extern IDnode
+  *id_locals, *id_globals,  /* objects, functions, typedefs, enum constants */
+  *st_locals, *st_globals;  /* struct, union, enum names */
+
+
+extern Tnode  *ID2T(IDnode *id);
+extern IDnode *T2ID(Tnode  *t );
+
+extern int parse(); /* Parse and compile opened token stream into 'outfile' */

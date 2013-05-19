@@ -1,0 +1,479 @@
+
+#echo	exprtype.c - Expression and types
+
+
+#include "error.h"
+#include "strings.h"
+#include "expr.h"
+#include "types.h"
+#include "exprtype.h"
+#include "struct.h"
+#include "tokens.h"
+#include "tree.h"
+#include "parse.h"
+
+#echo exprtype.c
+
+static int pointerP(Enode *E) {
+	return E->type->is==Star || E->type->is==OpenArray;
+}
+
+static int integralP(Enode *E) {
+	int t;
+	if ( E->type > 0x8000 ) t=E->type->is & FlagsAfter; else t=E->type & FlagsAfter;
+	t=(t==Int || t==Char || t==Long || t==Short || t==Enum);
+	error(Doing,"G:integralP(%x %Y)=%i",E->type,E->type,t);
+	return t;
+}
+
+static int integralPP(Enode *E) {
+	error(Doing,"G:Right operand of %t is %x %Y",E->is, E->right->type, E->right->type);
+	error(Doing,"G:Left operand of %t is %x %Y", E->is, E->left->type, E->left->type);
+	if ( !integralP(E->right) ) {
+		error(Error,"Right operand of %t wasn't integral: %Y",
+			E->is, E->right->type);
+		return 0 /* FALSE */;
+	}
+	if ( !integralP(E->left) ) {
+		error(Error,"Left operand of %t wasn't integral: %Y",
+			E->is, E->left->type);
+		return 0 /* FALSE */;
+	}
+	return 1 /* TRUE */;
+}
+static Tnode *integralT(Enode *E) {
+	if ( integralPP(E) )
+		return typpromo(E->right->type,E->left->type);
+	return ErrorType;
+}
+
+static int numericP(Enode *E) {
+	int t; 
+	if ( E->type > 0x8000 ) t=E->type->is & FlagsAfter; else t=E->type & FlagsAfter;
+	t=(integralP(E) || t==Float || t==Double || t==LongDouble || t==CharFloat);
+	error(Doing,"G:numericP(%x %Y)=%i",E->type,E->type,t);
+	return t;
+}
+
+static int numericPP(Enode *E) {
+	error(Doing,"G:Right operand of %t is %x %Y",E->is, E->right->type, E->right->type);
+	error(Doing,"G:Left operand of %t is %x %Y", E->is, E->left->type, E->left->type);
+	if ( !numericP(E->right) ) {
+		error(Error,"Right operand of %t wasn't numeric: %Y",
+			E->is, E->right->type);
+		return 0 /*FALSE*/;
+	}
+	if ( !numericP(E->left) ) {
+		error(Error,"Left operand of %t wasn't numeric: %Y",
+			E->is, E->left->type);
+		return 0 /*FALSE*/;
+	}
+	return 1 /* TRUE */;
+}
+
+static Tnode *numericT(Enode *E) {
+	if ( numericPP(E) ) return typpromo(E->right->type,E->left->type);
+	return ErrorType;
+}
+
+static int numptrPP(Enode *E) {
+	error(Doing,"G:Right operand of %t is %x %Y",E->is, E->right->type, E->right->type);
+	error(Doing,"G:Left operand of %t is %x %Y", E->is, E->left->type, E->left->type);
+	if ( !numericP(E->right) && !pointerP(E->right) ) {
+		error(Error,"Right operand of %t wasn't numeric or pointer: %Y",
+			E->is, E->right->type);
+		return 0 /*FALSE*/;
+	}
+	if ( !numericP(E->left)  && !pointerP(E->left) ) {
+		error(Error,"Left operand of %t wasn't numeric or pointer: %Y",
+			E->is, E->left->type);
+		return 0 /*FALSE*/;
+	}
+	return 1 /* TRUE */;
+}
+
+static Tnode *numptrT(Enode *E) {
+	if ( numericP(E->left) && numericP(E->right) )
+		return typpromo(E->right->type,E->left->type);
+	if ( pointerP(E->left) && pointerP(E->right) ) return Long;
+	if ( numericP(E->left) && pointerP(E->right) ) return E->right->type;
+	if ( pointerP(E->left) && numericP(E->right) ) return E->left->type;
+	return ErrorType;
+}
+
+static int lvalueP(Enode *E) {
+	int is; is=E->is;
+	return is==(Ident|Alt_Q) || is==Star || is==OpenArray || is==Dot || is==Arrow;
+}
+
+static Tnode *lvalueT(Enode *E) {
+	if ( lvalueP(E) ) return E->type;
+	error(Warn, "Expected an L-value, not %E",E);
+	return ErrorType;
+}
+
+static Tnode *check_param(Enode *E) {
+	if ( E->left && E->left->type ) return E->left->type->type;
+	return ErrorType;
+}
+
+
+static Tnode *simpletype(Enode *E) { return numericP(E); }
+
+static Tnode *seektype(char *s) {
+	IDnode *id;
+	error(Doing,"G:seektype( %s )",s);
+	id=seekfind(s,id_globals);
+	error(Doing,"G:seektype=%x, %Y",id,id->ty.type);
+	return id->ty.type;
+}
+
+## Given a type leading to a struct or union, return NULL or the STnode list
+
+static STnode *base_struct(Tnode *t) {
+	while ( t>0x8000 && ( t->is!=Struct && t->is!=Union ) ) {
+		error(Doing,"G:base_struct into %y",t);
+		t=t->type;
+	}
+	if ( t<0x8000 ) return 0 /* NULL */;
+	error(Doing,"G:base_struct return %L",t->type);
+	return t->type;
+}
+
+## Resolve a Dot or Arrow expression's tag type. This is where any clever
+## substructure searching will probably take place.
+
+## XXX Should link the STnode to ->data or something.
+
+static Tnode *struct_field(Enode *E) {
+	STnode *st;
+	Tnode *t;
+	error(Doing,"G:struct_field( %E )",E);
+	if ( E->is==Arrow ) {
+		error(Doing,"G:struct_field - Arrow right %E : %y",
+										E->right,E->right->type);
+		if ( !pointerP(E->right) ) {
+			error(Error,"Expected %y to be a pointer (Got %t)",
+				E->right->type,E->right->type->is);
+			return ErrorType;
+		}
+		else {
+			st=base_struct(E->right->type);
+		}
+	}
+	else
+		st=base_struct(E->right->type);
+	if ( !st ) {
+		error(Error,"Expected struct/union thing, found %y",E->right->type);
+		return ErrorType;
+	}
+	while ( st ) {
+		if ( !strcmp(st->name,E->left) ) {
+			E->data=st->offset;
+			error(Doing,"G:Found %s with %y",st->name,st->type);
+			return E->type=st->type;
+		}
+		error(Doing,"G:Unfound %s cmp %s",st->name,E->left);
+		st=st->next;
+	}
+	error(Error,"Tag %s unfound in struct/union",E->left);
+	return ErrorType;
+}
+
+## Return the type of this Enode, based on the Enode's ->is and,
+## if appropriate, its left and right (and data).
+
+extern Tnode *typeof ( Enode *node ) {
+
+	int is; is=node->is & FlagsAfter;
+
+##	error(Doing,"G:typeof( %t )",is);
+	error(Doing,"G:typeof( %E )",node);
+
+##	Need to write code for each of these to make a reference to the type.
+##	It is anticipated that returned values will only need to refer to
+##	bits of extant type structures (of the identifiers or typecasts), with the
+##	sole exception of AddressOf, which may be able to create the optional
+##	Pointer-To field if none is extant, or may have a new one built each time.
+##
+##	Special error type, ErrorType, which is legal in all typechecking contexts,
+##	to ameliorate typecheck error cascades.
+
+## 01 Primary
+	if ( is == Ident ) {
+		if ( ! node->type ) {
+			IDnode *id;
+			char *t; t=node->data;
+			id=Lseekfind(t, id_locals);
+			if ( id ) {
+				error(Doing,"G:Ident %s became %x %s %Y",
+									t,id,id->id.name,id->ty.type);
+				node->data=id;
+				node->type=id->ty.type;
+				node->is=Ident | Alt_Q;
+			}
+			else {
+				error(Error,"Undefined identifier %s",t);
+				node->data=t;
+				node->type=ErrorType;
+			}
+		}
+		return node->type;
+	}
+	if ( is == IntConst )	return seektype("int");
+	if ( is == RealConst )	return seektype("real");
+	if ( is == CharConst )	return seektype("char");
+	if ( is == String	)	return seektype("-string");
+	if ( is == WideChar	)	return seektype("-wchar");
+	if ( is == WideStr 	)	return seektype("-wstring");
+	if ( is == Ellipsis	) {
+		error(Error,"Parse error? I didn't expect Ellipsis here.");
+		return ErrorType;
+	}
+	if ( is == OpenBracket ) {
+		return node->right->type;
+	}
+	if ( is == CloseBracket ) {
+		error(Error,"Parse error? I didn't expect CloseBracket here.");
+		return ErrorType;
+	}
+
+## 02 postfix
+	if ( is == OpenArray ) {
+		if	( pointerP( node->left ) && integralP( node->right ) )
+			return node->left->type->type;	/* Step past Array/Star */
+		else
+		if	( pointerP( node->right ) && integralP( node->left ) )
+			return node->right->type->type;	/* Step past Array/Star */
+		else {
+			error(Error,
+				"Expected array/pointer with integral here, found %y and %y",
+				node->left->type,node->right->type);
+			return ErrorType;
+		}
+	}
+	if ( is == CloseArray ) {
+		error(Error,"Parse error? I didn't expect CloseArray here.");
+		return ErrorType;
+	}
+	if ( is == Function )					return check_param(node);
+	if ( is == Dot || is == Arrow )			return struct_field(node);
+	if ( is == PostInc || is == PostDec )
+		if ( numericP(node->right) || pointerP(node->right) )
+			return lvalueT(node->right);
+		else
+			{
+				error(Error,"%t applied to non-additive type %y",
+					is,node->right->type);
+				return ErrorType;
+			}
+
+## R to L start
+## 03 unary expression
+	if ( is == PreInc || is == PreDec )
+		if ( numericP(node->right) || pointerP(node->right) )
+			return lvalueT(node->right);
+		else
+			{
+				error(Error,"%t applied to non-additive type %y",
+					is,node->right->type);
+				return ErrorType;
+			}
+	if ( is == SizeOf )			return seektype("int");
+	if ( is == AddressOf ) {
+		Tnode *t;
+		if ( node->right->type == OpenArray ) {
+			return node->right->type;
+		}
+		t=new_tnode();
+		t->is=Star; t->type=node->right->type; t->value=AddressOf;
+		return t;
+	} else
+	if ( is == Star ) {
+		if	( pointerP( node->right ) )
+			return node->right->type->type;	/* Step past Array/Star */
+		else {
+			error(Error,"Expected array/pointer here, found %y",
+					node->right->type);
+			return ErrorType;
+		}
+	} else
+	if ( is == Positive || is == Negative ) {
+		if ( numericP(node->right) ) return node->right->type;
+		error(Error,"Expected a numeric type for unary %t, found %y",
+				is,node->right->type);
+		return ErrorType;
+	} else
+	if ( is == BitNot ) {
+		if ( integralP(node->right) ) return node->right->type;
+		error(Error,"Expected an integral type for unary %t, found %y",
+				is,node->right->type);
+		return ErrorType;
+	} else
+	if ( is == LogNot ) {
+		if ( integralP(node->right) || pointerP(node->right) ) return node->right->type;
+		error(Error,"Expected an integral or pointer type for unary %t, found %y",
+				is,node->right->type);
+		return ErrorType;
+	}
+## R to L end
+
+## 04 cast expression
+	if ( is == Typecast ) {
+		return node->type;
+	}
+
+## 05 multiplicative expression
+	if ( is == Times || is == Div ) {
+		return numericT(node);
+	}
+	if ( is == Mod ) {
+		return integralT(node);
+	}
+
+## 06 additive expression
+	if ( is == Add ) {
+		if ( pointerP(node->left) && pointerP(node->right) ) {
+			error(Error,"Can't add pointers together");
+			return ErrorType;
+		}
+		return numptrT(node);
+	} else
+	if ( is == Take ) {
+		if ( numericP(node->left) && pointerP(node->right) ) {
+			error(Error,"Can't subtract number from pointer");
+			return ErrorType;
+		}
+		return numptrT(node);
+	}
+
+## 07 shift expression
+	if ( is == LeftShift || is == RightShift ) {
+		return integralT(node);
+	}
+
+## 08 relational expression (May raise a type error, but always returns 0/1)
+##	LessThan GreaterThan LessEqual GreaterEqual
+	if ( LessThan <= is && is <= GreaterEqual ) {
+		int rr;
+		if ( !numptrPP(node) ) return ErrorType;
+		rr=typcmp(node->left->type,node->right->type,0);
+		if ( rr & typ_pointer ) {
+			error(Warn,"Pointer mismatch for %t: %y and %y",
+				is,node->left->type,node->right->type);
+		} else
+		if ( rr ) {
+			error(Error,"Type mismatch for %t: %y and %y (%r)",
+				is,node->left->type,node->right->type,rr);
+			return ErrorType;
+		}
+		return seektype("char");
+	}
+
+## 09 equality expression (May raise a type error, but always returns 0/1)
+	if ( is == IsEqual || is == NotEqual ) {
+		int rr;
+		if ( !numptrPP(node) ) return ErrorType;
+		rr=typcmp(node->left->type,node->right->type,0);
+		if ( rr & typ_pointer ) {
+			error(Warn,"Pointer mismatch for %t: %y and %y",
+				is,node->left->type,node->right->type);
+		} else
+		if ( rr && !numericPP(node) ) {
+			error(Error,"Type mismatch for %t: %y and %y (%r)",
+				is,node->left->type,node->right->type,rr);
+			return ErrorType;
+		}
+		return seektype("char");
+	}
+
+## 10 AND expression
+## 11 exclusive-OR expression
+## 12 inclusive-OR expression
+	if ( is == BitAnd || is == BitEor || is == BitOr ) {
+		if ( !integralPP(node) ) return ErrorType;
+		return seektype("char");
+	}
+
+## 13 logical and expression (May raise a type error, but always returns 0/1)
+## 14 logical or expression (May raise a type error, but always returns 0/1)
+	if ( is == LogAnd || is == LogOr ) {
+		if ( !numptrPP(node) ) return ErrorType;
+		return seektype("char");
+	}
+
+## 15 conditional expression  (Right to left)
+	if ( is == Query ) {
+		Enode *e; int rr; e=node->data;
+		if ( !simpletype(e) ) {
+			error(Error,"Wanted a simple type for ()?:, found %y",e->type);
+			return ErrorType;
+		}
+## left/right types must be compatible.
+## Implies that a?(struct_a=struct_b):(int_a=int_b) is illegal.
+		rr=typcmp(node->right->type, node->left->type,0);
+		if ( rr & typ_pointer ) {
+			error(Warn,"Pointer mismatch for %t: %y and %y",
+				is,node->left->type,node->right->type);
+		} else
+		if ( rr ) {
+			error(Error,"Types of ?():() were not compatible (%r)",rr);
+			return ErrorType;
+		}
+		return node->right->type;
+	}
+	if ( is == Colon ) {
+		error(Error,"Parse error? Colon didn't link to Query.");
+		return ErrorType;
+	}
+
+## 16 assignment expression  (Right to left)
+##	Assign, TimesEqual, DivEqual, ModEqual, AddEqual, TakeEqual,
+##	  LeftShiftEqual, RightShiftEqual, AndEqual, EorEqual, OrEqual,
+	if ( Assign == is ) {
+		int rr;
+		error(Doing,"G:Assign given %E",node);
+		if ( !lvalueP(node->left) ) {
+			error(Error,"Left operand of %t is not an lvalue: %E",is,node->left);
+			return ErrorType;
+		} else ;
+		error(Doing,"G:to typcmp(%y,%y,%i) rec'd %E",
+			node->left->type,node->right->type,0,node);
+		rr=typcmp(node->left->type,node->right->type,0);
+		if ( rr & typ_pointer ) {
+			error(Warn,"Pointer mismatch for %t: %y and %y",
+				is,node->left->type,node->right->type);
+		} else
+		if ( rr ) {
+			error(Error,"Type mismatch for %t: %y and %y (%r)",
+				is,node->left->type,node->right->type,rr);
+			return ErrorType;
+		}
+		error(Doing,"G:typcmp() left  %E",node);
+		return node->left->type;
+	}
+	if ( TimesEqual == is || is == DivEqual) {
+		if ( !lvalueP(node->left) ) {
+			error(Error,"Left operand of %t is not an lvalue: %E",is,node->left);
+			return ErrorType;
+		} else
+		if ( !numericPP(node) ) return ErrorType;
+		return typpromo(node->left->type,node->right->type);
+	}
+	if ( ModEqual <= is && is <= OrEqual ) {
+		if ( !lvalueP(node->left) ) {
+			error(Error,"Left operand of %t is not an lvalue: %E",is,node->left);
+			return ErrorType;
+		} else
+		if ( !integralPP(node) ) return ErrorType;
+		return typpromo(node->left->type,node->right->type);
+	}
+
+## 17 expression
+	if ( is == Comma ) {
+		return node->right->type;
+	}
+
+	error(Error,"typeof(): Unexpected operator %t",is);
+	return ErrorType;
+}

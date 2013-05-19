@@ -1,0 +1,18 @@
+
+
+#IF  -- Always starts a new record.
+               Entry=0               True=0
+                                     False=elif seek   1
+               Entry=non-0           State=endif-seek  2
+
+#ELIF -- These change current record
+               Entry=elif            True=0
+                                     False=elif seek    1
+               Entry=0 or endif      State=endif-seek   2
+               Entry=endif-expecting State=endif-expecting 3 and complain
+
+#ELSE          Entry=0 or endif      State=endif-expecting 3
+               Entry=endif-expecting State=endif-expecting 3 and complain
+               Entry=elif            State=0
+
+#ENDIF     always delete record -- status irrelevant

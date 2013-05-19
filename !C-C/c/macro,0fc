@@ -1,0 +1,265 @@
+/*   macro.c -- Removed from prepr.c for size reasons.
+ *              Expands macros and incidentally tokenise-monospaces line.
+ */
+
+
+#include "malloc.h"
+#include "strings.h"
+#include "tree.h"
+#include "macro.h"
+#include "error.h"
+#include "prepr.h"
+
+extern int MACNODE='MACN';
+extern MACnode *macrotree=0; /* Initialised properly in  *
+                              * prepr.c:do_include()     */
+
+/*  Macro structure: name   - name of macro
+ *                   body   - replacement text. \01<n> param    n=1,2,3..
+ *                                              \02<n> # param
+ *                                              \03    ## directive
+ *                   params - <param-count><param1><0><param2><0>...<0><0>
+ *                            but params==0 -> no params
+ */
+
+static char *int_macroexpand( char * , int * );
+
+static char *prim_macroexpand( char *line , int *change_flag ) {
+
+         /* Replace macros in line.                                   *
+          *     (IFF ##, \3 does not preceed or succeed a macro call) *
+          * Line is realloc()able, and is also extensible if          *
+          *  final char is <10>                                       *
+          * *change_flag is set to 1 if macros have been inflicted.   */
+
+  char *lptr, *nuline;
+  int nuix, nulen;
+  lptr=line; nuix=*change_flag=0;
+
+  nuline=malloc(nulen=1); /* Always includes terminator place */
+
+  /*  Parse through and copy this line until an id to macro-expand  *
+   *  Line extension can only occur during macro expansion          */
+
+  while ( *lptr && *lptr!=10 ) {
+    char *lpt2; lpt2=skiphead(lptr); lptr=steptoken(lpt2);
+                              /* Single chars are tokens too here */
+
+  /* Should test for ## (\003) to stop macros */
+
+    if ( isalpha(*lpt2) ) {
+      MACnode *macro;
+
+      { char p; p=*lptr; *lptr=0; macro=seekfind(lpt2,macrotree); *lptr=p; }
+
+      if ( macro && macro->body ) {
+        if ( macro->params ) { /* Parameter-type macro */
+
+          lptr=skiphead(lptr); /* lpt2 = macroname. lptr=just after */
+
+          if ( *(lptr-1)==10 ) error(Warn,"Macro call straddles end-of-line.");
+          while ( *(lptr-1)==10 ) { /* Should append to this line */
+            char *xline, *nline; xline=giveline();
+            nline=realloc(line, (--lptr-line)+strlen(xline)+1);
+            lptr=nline+(lptr-line); lpt2=nline+(lpt2-line);
+            strcpy(lptr,xline); free(xline);
+            lptr=skiphead(lptr); line=nline;
+          }
+
+     /* Should test for ## (\003) for macro suppression */
+
+          if ( *lptr!='(' )
+            error(Warn,"Macro expected a parameter list.");
+          else {
+            char **params;
+            int parct, parmx;
+            { char *p; p=macro->params; parmx=*p; } parct=0;
+            params=malloc(parmx*4 /* sizeof char* */ );
+            memset(params, 0, parmx*4 /* sizeof char* */ );
+
+         /* Collect macro parameters */
+
+            while ( parct<parmx && *lptr!=')' && *lptr ) {
+              int brax; brax=0;
+              char *lpt;
+              lptr=skiphead(lptr+1);  /* Step ( or , */
+              if ( *(lptr-1)==10 )
+                     error(Warn,"Macro call list straddles end-of-line.");
+              while ( *(lptr-1)==10 ) { /* Should append to this line */
+                char *xline, *nline; xline=giveline();
+                nline=realloc(line, (--lptr-line)+strlen(xline)+1);
+                lptr=nline+(lptr-line); lpt2=nline+(lpt2-line);
+                strcpy(lptr,xline); free(xline);
+                lptr=skiphead(lptr); line=nline;
+              }
+              lpt=lptr;
+
+              while ( *lpt && ( brax || ( *lpt!=',' && *lpt!=')' ) ) ) {
+                if ( *lpt=='(' ) brax++;
+                if ( *lpt==')' && brax ) brax--;
+                lpt=skiphead(steptoken(lpt));
+                if ( *(lpt-1)==10 )
+                       error(Warn,"Macro call item straddles end-of-line.");
+                while ( *(lpt-1)==10 ) { /* Should append to this line */
+                  char *xline, *nline; xline=giveline();
+                  nline=realloc(line, (--lpt-line)+strlen(xline)+1);
+                  lpt =nline+(lpt -line); lptr=nline+(lptr-line);
+                  lpt2=nline+(lpt2-line); strcpy(lpt,xline); free(xline);
+                  lpt=skiphead(lpt); line=nline;
+                }
+              }
+
+              /* Param is [lptr..lpt-1] */
+
+              if ( lpt>lptr ) {
+                if ( *--lpt<=' ' ) while ( *lpt<=' ' && lpt>lptr ) lpt--;
+                lpt++;
+              }
+              { char p; p=*lpt; *lpt=0; params[parct++]=strdup(lptr); *lpt=p; }
+              lptr=skiphead(lpt); /* Comma/close eaten by next iteration */
+            }
+
+        /* Should test for ## (\003) here to stop macros */
+
+            if ( parct!=parmx || *lptr!=')' ) {
+              error(Warn,"Parameter exception in apparent macro call.");
+              for ( parmx=0; parct>parmx; ) free(params[parmx++]);
+              free(params);
+            } else { /* Can now do this replace */
+              int oldix, to, relen; oldix=nuix; to=0;
+              char *from, *repl;
+
+              lptr++;  /* Eat final bracket */
+
+              repl=strdup( from=macro->body ); relen=strlen(repl)+1;
+
+/* Copy macro with param subst to repl (thence to nuline[nuix]) */
+
+              while ( *from )
+                if ( *from>2 ) repl[to++]=*from++;
+                else if ( *from++==2 ) {
+                  char *par;
+                  repl=realloc(repl,relen+=2+strlen(par=params[*from++-1]));
+                  repl[to++]='"';
+                  while ( *par ) {
+                    if ( *par=='"' || *par=='\\' ) {
+                      repl=realloc(repl,relen+=1);
+                      repl[to++]='\\';
+                    }
+                    repl[to++]=*par++;
+                  }
+                  repl[to++]='"';
+                } else {
+                  char *par; par=strdup(params[*from++-1]);
+                  par=int_macroexpand(par,*change_flag);
+                  repl=realloc(repl,relen+=strlen(par));
+                  strcpy(repl+to,par); to+=strlen(par);
+                  free(par);
+                }
+
+              { int l; l=0;
+                while ( l<parmx ) free(params[l++]);
+                free(params);
+              }
+
+/* Now to scan 0..to-1 for <3> and eliminate whitespace */
+
+              { int pix, oldix; oldix=pix=0;
+                while ( repl[pix] && pix<to )
+                  if ( repl[pix]!=3 ) repl[oldix++]=repl[pix++];
+                  else {
+                    while ( repl[oldix-1]<=' ' && oldix ) oldix--;
+                    while ( repl[++pix]<=' ' && pix<to );
+                  }
+                repl[ to=oldix ]=0;
+              }
+              { char *macbody, *macpar, *prepl; int l;
+                macbody=macro->body; macpar=macro->params; macro->params=0;
+                prepl=strdup(macro->base.name);
+                prepl=realloc(prepl, 2+( l=strlen(prepl) ) );
+                prepl[l++]='`'; prepl[l]=0; macro->body=prepl;
+                repl=int_macroexpand(repl,*change_flag);
+                free(prepl);
+                macro->body=macbody; macro->params=macpar;
+              }
+              nuline=realloc(nuline,nulen+=( to=strlen(repl) ));
+              strcpy(nuline+nuix,repl); nuix+=to; free(repl);
+
+          /* Copy to end of line and return..? */
+
+              nuline=realloc(nuline,nulen+=strlen(lptr));
+              strcpy(nuline+nuix, lptr); free(line); *change_flag=1;
+
+              return int_macroexpand(nuline,change_flag);
+            }
+          }
+
+          if ( lpt2!=lptr ) lptr=steptoken(lpt2);
+
+        } else { /* Non-parameter type macro, insert at nuline[nuix] */
+
+          char *to,*from,*repl; to=from=repl=strdup(macro->body);
+
+     /* Should ensure macroname is not followed by ## (/003) */
+
+          while ( *from )
+            if ( *from!=3 ) *to++=*from++;
+            else {
+              from=skiphead(from+1);
+              while ( *to<=' ' && to>repl ) to--;
+            }
+
+          { char *macbody, *macpar, *prepl; int l;
+            macbody=macro->body; macpar=macro->params; macro->params=0;
+            prepl=strdup(macro->base.name);
+            prepl=realloc(prepl, 2+( l=strlen(prepl) ) );
+            prepl[l++]='`'; prepl[l]=0; macro->body=prepl;
+            repl=int_macroexpand(repl,change_flag);
+            free(prepl);
+            macro->body=macbody; macro->params=macpar;
+          }
+
+          nuline=realloc(nuline,nulen+=strlen(repl));
+          strcpy(nuline+nuix,repl); nuix+=strlen(repl); free(repl);
+
+       /* Copy to end of line and return..? */
+
+          nuline=realloc(nuline,nulen+=strlen(lptr));
+          strcpy(nuline+nuix, lptr); free(line); *change_flag=1;
+
+          return int_macroexpand(nuline,change_flag);
+        }
+      }
+    }
+
+/* [to be confirmed] - removal of deref is not a problem. */
+
+    if ( !(*lpt2) ) lptr=lpt2;
+
+    if ( lptr!=lpt2 ) {  /* lptr=past end, lpt2=start of token */
+      nuline=realloc(nuline, (nulen+=lptr-lpt2+1) );
+      while ( lpt2!=lptr && *lpt2 ) nuline[nuix++]=*lpt2++;
+      nuline[nuix++]=' ';
+    }
+  }
+
+  nuline[nuix]=0; free(line); *change_flag=0;
+
+  return nuline; /*  Some identifers may contain '`'.            *
+                  *  This should be removed during tokenisation. */
+}
+
+static char *int_macroexpand( char *line, int *ex_changed ) {
+  int changed; changed=0; *ex_changed=0;
+  do {
+    line=prim_macroexpand(line,&changed);
+    if ( changed ) *ex_changed=1;
+  } while ( changed );
+  return line;
+}
+
+extern char *macroexpand( char *line ) {
+  int tmp;
+  return prim_macroexpand(line, &tmp);
+}
+

@@ -1,0 +1,108 @@
+/* Tree.c -- Tree handler */
+
+#include "malloc.h"
+#include "tree.h"
+#include "error.h"
+
+extern int strcmp(char *, char *); /* a!="" b="", ret +ve */
+
+/*--------------------------------------------------------------------------*/
+/* Generate a node with name and of size, with other Bnode members clear */
+
+static Bnode *makenode( char *name, int size, int MAGIC ) {
+	Bnode *record;
+	error(Doing,"K:Makenode( %s, %d ); free=%d",name,size,realloc(0,0)); 
+	record=malloc(size);
+	record->MAGIC=MAGIC; record->left=record->right=0;
+	if ( name ) {
+		char *end;
+		for (end=name; *end++;);
+		end=record->name=malloc(end-name);
+		if ( !end ) {free(record); return 0;}
+		while ( *end++ = *name++ );
+	} else
+		record->name=0;
+	return record;
+}
+
+/*--------------------------------------------------------------------------*/
+/* Return pointer to pointer, to which to hook node with given name */
+/* NOTE: seekadd of "" always fails to the right->left* */
+
+static Bnode **seeknode( char *name , Bnode *seek ) {
+	int i; Bnode **ret_p; ret_p=&seek;
+	do {
+		if ( *name && (i=strcmp(name,seek->name))==0 ) return ret_p;
+		if ( i<0 ) /* Not <=, for "" right->left* bias */
+			ret_p=&seek->left,  seek=seek->left;
+		else
+			ret_p=&seek->right, seek=seek->right; /* i>0 if at root("") */
+	} while (seek);
+	return ret_p;
+}
+
+/*--------------------------------------------------------------------------*/
+/* Return address of extant named node in tree, or return a new one of size */
+/* NOTE: seekadd of "" always makes a new node */
+
+extern Bnode *seekadd( char *name, Bnode *tree, int size, int MAGIC ) {
+	Bnode **ret_p;
+	if ( *(ret_p=seeknode(name,tree)) ) return *ret_p;
+	return *ret_p=makenode(name,size,MAGIC);
+}
+
+/*--------------------------------------------------------------------------*/
+/* Return address of extant named node in tree, or NULL */
+/* NOTE: seekfind of "" always fails */
+
+extern Bnode *seekfind( char *name , Bnode *tree ) {
+	return *(seeknode(name,tree));
+}
+
+/*--------------------------------------------------------------------------*/
+/* Return extant named node in root->left linked tree-list, or NULL */
+/* NOTE: Lseekfind of "" always fails */
+
+extern Bnode *Lseekfind( char *name , Bnode *root ) {
+	Bnode *ret;
+	do {
+		if ( ret=*(seeknode(name,root)) ) return ret;
+	} while ( root=root->left );
+	return 0;
+}
+
+/*--------------------------------------------------------------------------*/
+/* Return a new header. Internally, name="" */
+
+extern Bnode *makeheader( int size, int MAGIC ) {
+	return makenode("",size,MAGIC);
+}
+
+/*--------------------------------------------------------------------------*/
+/* Iterate over each node. Accepts a function for something (eg freeID). */
+
+extern void iterate( Bnode *root, void (*func)(void *) ) {
+##	sys("OS_WriteC",'i');
+	if ( root<0x8000 ) return;
+	if ( root->left  ) iterate(root->left,  func);
+	if ( root->right ) iterate(root->right, func);
+#echo func(root) is not an error
+	if ( func ) func(root);
+	else {
+		if ( root->name > 0x8000 ) free(root->name);
+		free(root);
+	}
+}
+
+/*--------------------------------------------------------------------------*/
+/* Iterate over each node in strict order, calling a function each time. */
+
+extern void iterate_ordered( Bnode *root, void (*func)(void *) ) {
+##	sys("OS_WriteC",'o');
+	if ( root<0x8000 ) return;
+	if ( root->left  ) iterate_ordered(root->left,  func);
+#echo func(root) is not an error.
+	if ( func ) func(root);
+	if ( root->right ) iterate_ordered(root->right, func);
+}
+

@@ -1,0 +1,373 @@
+
+#echo declartion.c
+
+##	Declarations.. extern unsigned const long things.
+##	It'll call out for struct.
+##	structs, unions and enums are in struct.c
+##	* [] () type modifiers are in typemod.c
+
+#include "tree.h"
+#include "strings.h"
+#include "error.h"
+#include "tokens.h"
+#include "expr.h"
+#include "types.h"
+#include "struct.h"
+#include "parse.h"   /* The real source of {id|st}_{global|local} */
+
+##--------------------------------------------------------------------------
+## Tree roots and tables.
+
+##	NB, pp_local->Left points 'up' the list of trees towards pp_global
+
+char typechar[]={ Char, Const, Double, Enum, Float, Int, Long,
+					Short, Signed, Struct, Void, Volatile, Union, Unsigned, 0};
+
+					/* NB CharFloat and LongDouble are composite types */
+
+##---------------------------------------------------------------------------
+## Couple of misc functions. Typedefs defined in parse.c.
+
+extern int is_typedef(char *name) {
+	IDnode *id; id=Lseekfind( name, id_locals );
+	if ( id )
+		error(Doing,"@:Trying %s as a typedef, got %x->ty.is=%t %d",
+			name,id,id->ty.is,id->ty.is);
+	else
+		error(Doing,"@:Trying %s as a typedef, got NULL. (That's a no :)",name);
+	return ( id && id->ty.is==Typedef );
+}
+
+## extern int isspecqual( void );
+
+extern int istype( int n ) {	/* True if peektoken(n) is a type token */
+	Token *see; see=peektoken(n);
+	if ( strchr(typechar,see->is) ) return 1;
+	if ( see->is == Ident && is_typedef(see->data) ) return 1;
+	return 0;
+}
+
+extern Tnode *Etype( Enode *exp )
+{
+	;
+}
+
+
+##---------------------------------------------------------------------------
+## Primitive type-specifiers.
+
+enum BaseType { any_is, int_is, char_is, void_is,
+					long_is, longint_is, short_is, shortint_is,
+				double_is, float_is, other_is, charfloat_is, longdouble_is,
+				unsigned_is=0x10,  signconf_is=0x20, unsignedconf_is=0x30,
+				volatile_is=0x100, const_is=0x200
+##				,any_isnt=0x3FF
+				};
+						static int any_isnt=0x3FF;
+
+static int trans[]={NullToken, Int, Char, Void, Long, Long, Short, Short,
+                       Double, Float, Struct, CharFloat, LongDouble };
+
+char store[]= { Extern, Static, Typedef, Auto, Register, 0 };
+
+##	Primitive type-specifers:
+##
+##	Decl flags:
+##	   14,13,12 : extern=1, static, typedef, auto, register=5
+##			9,8 : const, volatile
+##			5,4 : 5=confirmed, 4=unsigned ( !4=signed )
+##		3 2 1 0 :
+##			  0  0  int (unconfirmed) + anything  [Might be a struct etc]
+##			  1  1  int (confirmed)
+##			1 0  2  char (unsigned)   + float
+##			1 1  3  void
+##		  1 0 0  4  long              + int, double
+##		  1 0 1  5  long-int
+##		  1 1 0  6  short             + int
+##		  1 1 1  7  short-int
+##		1 0 0 0  8  double       NB. Double is the first unsignable thing
+##		1 0 0 1  9  float
+##		1 0 1 0  A  < Means that something like 'struct' found >
+##		1 0 1 1  B  char-float   (ie Packed BCD, for printf() stuff.)
+##		1 1 0 0  C  long-double
+
+
+##	On entry, 'specs' Should be 0xF000 if storage specs inappropriate
+##								0xE000 if nonglobal storage specs inappropriate
+##								0x0000 if storage specs okay
+##								0x?00A if a type is inappropriate
+
+##	Parse declarator-specifier tokens and return
+
+static int prim_decl_specs( int specs ) {
+
+	Token *see; int been, t; char *p;
+	see=seetoken();
+	do {
+		been=see->is;  /* Been set to 0 for used */
+error(Doing,"@:%T-",see);
+## Storage types: 0xF000 - extern=1 static typedef auto register=5
+
+		if ( p=strchr(store,been) ) {
+error(Doing,"@:StoTyp.");
+			t=specs & 0xF000;
+			if ( t==0xF000 )
+				error(Error,"Inappropriate specifier %t ignored",been);
+			else
+			if ( t==0xE000 && (been==Auto || been==Register) )
+				error(Error,"Non-global storage specifier '%t' ignored",been);
+			else
+			if ( t && t<0x6000 )
+				error(Error,"Extraneous storage specifier '%t' ignored",been);
+			else
+				specs&=~0xF000, specs |= ((p-store)+1)<<12;
+			been=0;
+		}
+
+## Type qualifiers: const_is  volatile_is
+
+		t=0;
+		if ( been==Volatile )	t=volatile_is;	else
+		if ( been==Const )		t=const_is;
+
+		if ( t ) {
+error(Doing,"@:TypQua.");
+			if ( specs & t ) error(Alert,"Type is already %t.",been);
+			else specs|=t;
+			been=0;
+		}
+
+## Signedness: signconf_is  unsigned_is  (~unsigned_is)
+
+		t=specs&15;
+
+		if ( been==Signed || been==Unsigned ) {
+error(Doing,"@:SigSpe.");
+			if ( t==void_is )	error(Alert,"Ignoring un/signed for void");
+	else	if ( t==other_is )	error(Error,"Ignoring un/signed for this type");
+	else	if ( t>=double_is )	error(Error,"Ignoring un/signed for reals");
+	else	if ( specs&signconf_is ) error(Error,"Sign already determined");
+	else	{
+				specs|=signconf_is;
+				if ( been==Signed )	specs&=~unsigned_is;
+							else	specs|= unsigned_is;
+			}
+			been=0;
+		}
+
+## specs: !3,2,1,0: int?=0, int char void long long-int short short-int
+
+		if ( been==Void ) {
+error(Doing,"@:VoidTyp.");
+			if ( specs & any_isnt )
+				error(Error,"Cannot combine 'void' like this");
+			else
+				specs |= void_is;
+			been=0;
+		}
+
+		if ( been==Char ) {
+error(Doing,"@:CharTyp.");
+			if ( t==any_is ) {
+				specs |= char_is;
+				if ( ~specs & signconf_is ) specs |= unsigned_is;
+			}
+			else
+			if ( t==float_is ) {
+				specs |= char_is;
+				error(Ansi,"'char float' is not an ANSI type");
+			} else
+				error(Error,"Cannot combine 'char' like this");
+			been=0;
+		}
+
+		if ( been==Short ) {
+error(Doing,"@:Short.");
+			if ( t==any_is || t==int_is )
+				specs |= short_is;
+			else
+				error(Error,"Cannot combine 'short' like this");
+			been=0;
+		}
+
+		if ( been==Long ) {
+error(Doing,"@:Long.");
+			if ( t==double_is || t==int_is || t==any_is )
+				specs |= long_is;
+			else
+				error(Error,"Cannot combine 'long' like this");
+			been=0;
+		}
+
+		if ( been==Int ) {
+error(Doing,"@:Int.");
+			if ( (t & int_is)==int_is || t==char_is || t>=double_is )
+				error(Error,"Cannot combine 'int' like this");
+			else
+				specs |= int_is;
+			been=0;
+		}
+
+## specs: 3,2,1,0: double=8, float=9, n/a=10, char-float=11, long-double=12
+
+		if ( been==Float || been==Double ) {
+error(Doing,"@:FltTyp.");
+			if ( ( t==any_is ) || ( ( t==char_is ) && ( been==Float  ) ) ||
+								  ( ( t==long_is ) && ( been==Double ) )  )
+			{
+				specs |= ((been==Float)?float_is:double_is);
+				if ( t==charfloat_is )
+					error(Ansi,"'char float' is not an ANSI type");
+				if ( ( (specs & unsignedconf_is) == unsignedconf_is ) )
+					error(Alert,"Reals cannot be unsigned (forcing signed)");
+				specs &= ~unsigned_is; /* Force signed (also for char-float) */
+			} else
+				error(Error,"Cannot combine '%t' like this", been);
+			been=0;
+		}
+
+##  Struct, union, enum and typedef-types are allowed for specs & 0x3F == 0.
+##  They are dealt with by decl_specs(). After structs etc have been read,
+##   this is called again with specs | 0xA to mop up any const/volatile or
+##   storage specifiers.
+
+		if ( !been ) see=taketoken();	/* Token used, get next */
+
+	} while ( !been );		/* Until this token passed through unused.	*/
+error(Doing,"@:Left with %T and %x",see,specs);
+	return specs;
+}
+
+## Parses a declaration-specifier (or spec-qual through spec_qual() below).
+##	structs, unions and enums are parsed in struct.c.
+##
+##	The storage class is returned in *decl_spec which is also used to initiate
+##		prim_decl_specs, thus:
+##		 0 is for any storage spec in *decl_spec
+##	0xE000 allows only global storage specs in *decl_spec
+##	0xF000 or decl_spec==0 allows no storage specs (ie, spec_qual())
+##
+## Returns a qualified type to which a number of identifiers will be linked,
+##	via any declarators ( *, [], () ), to a typedef or struct type.
+##
+##	At present, 'enum foo ;' and 'struct foo extern ;' are wrongly legal.
+##	Probably easiest to solve with a global 'Something defined' flag.
+
+extern Tnode * decl_specs ( int * decl_spec );
+
+extern Tnode *spec_qual( void ) {
+	return decl_specs(0);
+}
+
+extern Tnode * decl_specs ( int * decl_spec ) {
+
+	int decl; Tnode *type;
+	type=0;
+
+	if ( decl_spec == 0 ) decl=0xF000; else decl=*decl_spec;
+
+error(Doing,"A:Pre-prim_decl_specs(), decl=0x%x",decl);
+
+	decl=prim_decl_specs(decl);
+
+error(Doing,"A:Post-prim_decl_specs(), decl=0x%x",decl);
+
+## Read primitive type details until a non-basetype token.
+##  The next token is now something like a struct or typedef id,
+##  or the start of the (abstract) declarator, or other.
+
+	if (  ( decl & 0x3F ) == 0 )	/* If no type and no sign information... */
+	{								/* ie volatile, const and storage only */
+		Token *see;
+		see=seetoken();
+
+error(Doing,"A:Token following is %T",see);
+
+		if ( see->is==Struct || see->is==Union )
+		{
+			int keyw; keyw=see->is;
+			taketoken();	/* Eat struct/union */
+			type=struct_specifier(keyw, decl);
+		}
+		else
+		if ( see->is==Enum )
+		{
+			taketoken();
+			type=enum_specifier(decl);
+		}
+		else
+		if ( see->is==Ident && is_typedef(see->data) )
+		{
+			IDnode *id; id=Lseekfind(see->data, id_locals);
+			type=ID2T(id);
+			taketoken();
+		}
+		else
+			see=0;
+		if ( see ) decl |= other_is;
+	}
+
+error(Doing,"A:Pre-2-prim_decl_specs(), decl=0x%x",decl);
+
+	decl=prim_decl_specs(decl); /* Pick up remaining consts etc */
+
+error(Doing,"A:Post-2-prim_decl_specs(), decl=0x%x",decl);
+
+##		Now decode decl into a Tnode style decl-spec
+
+	if ( type>0x8000 && ( decl & ( const_is | volatile_is ) ) )
+	{
+		int val; Tnode *mod;
+		val=0; mod=new_tnode();
+
+		if ( decl & const_is )		val |= Const_Q;
+		if ( decl & volatile_is)	val |= Volatile_Q;
+
+		error(Doing,"A:Usertype %y needs a %t qualifier-holder %t (%x)",
+					type,Mod,val,val);
+
+		mod->is=Mod | val; mod->type=type; type=mod; mod=mod->type;
+
+# Errr.. The idea of this was to stop user consting a typedef set const already
+# Errr.. But it's all a bit suspect. Check this.
+
+		while ( mod > 0x8000 )   /* While pointer rather than flag.. */
+		{
+			if ( (mod->is) & (type->is) & ( const_is | volatile_is ) )
+				{ mod=0; error(Error,"Type is already const/volatile."); }
+			else
+				mod=mod->type;
+		}
+		if ( (mod) & (type->is) & ( const_is | volatile_is ) )
+			error(Error,"Type is already const/volatile.");
+	}
+
+	if ( type < 0x8000 )
+	{
+		error(Doing,"A:Type translating from primitive to Token");
+		type=trans[ decl&15 ];
+
+		if ( type==NullToken )	type=Int;		/* Default type is int */
+
+		if ( type==Struct )
+		{
+			error(Error,"I'm not very happy with this type-expression.");
+			type=Int;
+		}
+
+		if ( decl & const_is )		type |= Const_Q;
+		if ( decl & volatile_is )	type |= Volatile_Q;
+		if ( decl & unsigned_is )	type |= Unsigned_Q;
+		if ( decl & signconf_is )	type |= SignSet_Q;
+	}
+
+	if ( decl_spec ) {
+		int t; t=(decl&0xF000) >> 12;
+		if (t && t<6) *decl_spec=store[t-1]; else *decl_spec=0;
+		error(Doing,"A:Almost out, decl=%x decl_spec=%t",decl,*decl_spec);
+	}
+
+##		Either token-type<0x8000 or Tnode pointer:
+
+	return type;
+}

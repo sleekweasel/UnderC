@@ -1,0 +1,227 @@
+
+#echo compiler.c - compiles a function or non-auto variable to assembly
+
+#include "tree.h"
+#include "tokens.h"
+#include "strings.h"
+#include "error.h"
+#include "expr.h"
+#include "types.h"
+#include "struct.h"
+#include "parse.h"
+#include "compile.h"
+
+## The compilation code will be written in two phases:
+##  Phase 1 - write something as poor as the BASIC compiler to speed code
+##				development.
+##  Phase 2 - write something better and fuller.
+
+##--------------------------------------------------------------------
+
+int busy_reg[16]={
+	0,0,0,0,0,0,0,0,0,0,	/* r0-9 */
+	1,	/* r10 sl */
+	1,	/* r11 fp */
+	1,	/* r12 ip=old sp */
+	1,	/* r13 sp */
+	1,	/* r14 lr */
+	1	/* r15 pc */
+};
+
+enum C_CODES {
+	C_EQ, C_NE,		C_CS, C_CC,		C_MI, C_PL,		C_VS, C_VC,
+	C_HI, C_LS,		C_GE, C_LT,		C_GT, C_LE,		C_AL, C_NV
+};
+
+char conditions[][3]={
+	"EQ", "NE",		"CS", "CC",		"MI", "PL",		"VS", "VC",
+	"HI", "LS",		"GE", "LT",		"GT", "LE",		"AL", "NV"
+};
+
+char *cond(int c) { return conditions[c]; }
+
+## Entry stack: <old fp> [STUFF]
+##                       [pushed params > 5]
+##              <old sp>
+##
+## Post entry : <old fp> [STUFF]
+##                       [pushed params > 5]
+##      <newfp>,<old sp> [pushed params <=4]
+##                       [pushed pc (R15) Makes a stack backtrace struct
+##                               lr (R14)
+##                               ip (R12=old sp)
+##              <new sp>         fp (R11)
+##                               (some) variable regs (R4-R9) ]
+##
+## Note, lr is used to restore flag values with
+##  a LDMFD sp!,{...,pc}^ since the ^ forces a complete load into
+##  pc, including the address and the status registers,
+
+##--------------------------------------------------------------------
+
+## Opens RAM:$.ain, settypes to BASIC, places assembly preamble,
+## initialises various variables.
+void compilation_init() {
+}
+
+##  Places symbol table (or runtime code if program is static), assembly
+##  postamble, closes RAM:$.ain
+##		Not entirely sure how to trigger assembly - oscli won't CHAIN""
+void compilation_end() {
+}
+
+## Dump strings and constants from earlier instructions.
+##  There's prolly a better way of doing it, but this'll do for now.
+##  I'm going to dump complicated intconsts in here too, to avoid using NV
+void compiler_datadump() {
+	printf("REM <Datadump>\n");
+}
+
+## Returns register holding return value
+static int compile_expr(Enode* e) {
+	printf("expr %e\n",e);
+	return 0;
+}
+
+## Returns truth opcode modifier
+static int compile_cond(Enode* e) {
+	printf("cond %e\n",e);
+	return C_EQ;
+}
+
+## Compile the statement-string f; stack pointer is sp_offset deeper than fp
+void compile_statement( IDnode *id, Cnode *f, Tnode* type, int sp_offset ) {
+	int test;
+	while ( f ) {
+		int is; is=f->is;
+		error(Doing,"S:compile_statement: %x = %t %x %x %x %x %x",
+			f,f->is,f->first,f->second,f->third,f->fourth,f->next);
+		if ( is==OpenCurly ) {
+##				{ 1 } 2=new_idtree 3=new_sttree
+			IDnode *idt, *stt; idt=(IDnode*)f->second; stt=(IDnode*)f->third;
+##			print_trees( idt->id.right, stt->id.right );
+			compile_statement(id,(Cnode*)f->first,type,sp_offset);
+		} else
+		if ( is==For ) {
+##				for ( 1 ; 2 ; 3 ) 4
+			printf("REM for ( * ;   ;   )\n");
+			compile_expr((Enode*)f->first);
+			printf("REM for (   ; * ;   )\n");
+			printf(".%s_%x_for_test\n",id->id.name,f);
+			test=compile_cond((Enode*)f->second);
+			printf("B%s %s_%x_for_break\n",cond(test^1),id->id.name,f);
+			printf("REM for (   ;   ;   ) *\n");
+			compile_statement(id,(Cnode*)f->fourth,type,sp_offset);
+			printf("REM for (   ;   ; * )\n");
+			printf(".%s_%x_for_continue\n",id->id.name,f);
+			compile_expr((Enode*)f->third);
+			printf("B %s_%x_for_test\n",id->id.name,f);
+			compiler_datadump();
+			printf(".%s_%x_for_break\n",id->id.name,f);
+		} else
+		if ( is==While ) {
+##				while (1) 2
+			printf("REM while ( * )\n");
+			printf(".%s_%x_while_test\n",id->id.name,f);
+			printf(".%s_%x_while_continue\n",id->id.name,f);
+			test=compile_cond((Enode*)f->first);
+			printf("B%s %s_%x_while_exit\n",cond(test^1),id->id.name,f);
+			printf("REM while (   ) *\n");
+			compile_statement(id,(Cnode*)f->second,type,sp_offset);
+			printf("B %s_%x_while_test\n",id->id.name,f);
+			compiler_datadump();
+			printf(".%s_%x_while_exit\n",id->id.name,f);
+		} else
+		if ( is==Do ) {
+##				do (1) while 2
+			printf("REM do * while (   )\n");
+			printf(".%s_%x_do_loop\n",id->id.name,f);
+			compile_statement(id,(Cnode*)f->first,type,sp_offset);
+			printf("REM do . while ( * ) *\n");
+			printf(".%s_%x_do_continue\n",id->id.name,f);
+			test=compile_cond((Enode*)f->second);
+			printf("B%s %s_%x_do_loop\n",cond(test),id->id.name,f);
+			printf(".%s_%x_do_break\n",id->id.name,f);
+		} else
+		if ( is==If ) {
+##				if (1) 2
+			printf("REM if ( * ) .\n");
+			test=compile_cond((Enode*)f->first);
+			printf("B%s %s_%x_if_exit\n",cond(test^1),id->id.name,f);
+			printf("REM if (   ) *\n");
+			compile_statement(id,(Cnode*)f->second,type,sp_offset);
+			printf(".%s_%x_if_exit\n",id->id.name,f);
+		} else
+		if ( is==Else ) {
+##				if (1) 2 else 3
+			printf("REM if ( * ) . else .\n");
+			test=compile_cond((Enode*)f->first);
+			printf("B%s %s_%x_else_false\n",cond(test^1),id->id.name,f);
+			printf("REM if (   ) * else .\n");
+			compile_statement(id,(Cnode*)f->second,type,sp_offset);
+			printf("B %s_%x_else_exit\n",id->id.name,f);
+			compiler_datadump();
+			printf("REM if (   ) . else *\n");
+			printf(".%s_%x_else_false\n",id->id.name,f);
+			compile_statement(id,(Cnode*)f->third,type,sp_offset);
+			printf(".%s_%x_else_exit\n",id->id.name,f);
+		} else
+		if ( is==Switch ) {
+##				switch (1) 2
+			printf("REM switch ( %e )\n",f->first);
+			compile_statement(id,(Cnode*)f->second,type,sp_offset);
+		} else
+		if ( is==Case ) {
+##				case 1=%E
+			printf("REM case %e:\n",f->first);
+		} else
+		if ( is==Default ) {
+##				default
+			printf("REM default:\n");
+		} else
+		if ( is==Return ) {
+##				return 1=%E (or NULL)
+			printf("REM return %e;\n",f->first);
+		} else
+		if ( is==Break ) {
+##				break
+			printf("REM break;\n");
+		} else
+		if ( is==Continue ) {
+##				continue
+			printf("REM continue;\n");
+		} else
+		if ( is==Goto ) {
+##				goto 1
+			printf("REM goto %s;\n",f->first);
+		} else
+		if ( is==Ident ) {
+##				1: 1=%s (goto-label)
+			printf("REM %s: /* Goto label */\n",f->first);
+		} else
+		if ( is==SemiColon ) {
+##				1=%E
+			printf("REM %e;\n",f->first);
+		} else
+		{
+			error(Failed,"Uncouth Cnode: %x -> is = %t",f,is);
+		}
+		f=f->next;
+	}
+}
+
+## Places identifier in the file, if it defines space. If it also has an
+## initialiser..
+extern void compile_identifier( IDnode* id ) {
+##	Phase 1 - initialiser will be in IDNode's initialiser field.
+##		If it's a simple value, it will just be placed.
+##		If it's an array initialiser, it must be a flat initialiser, probably
+##		in an Expression tree with commas.
+}
+
+## Compiles the given function.
+void compile_func( IDnode *id, Cnode *func, Tnode *type ) {
+	printf("Compile %s\nType %y\n",id->id.name,type);
+	compile_statement(id,func,type,0);
+	printf("REM Return <void>\n");
+}

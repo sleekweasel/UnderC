@@ -1,0 +1,79 @@
+
+Types
+-----
+
+When a declaration <type> <mods><ident><mods2> is encountered, the basic
+ type <type> is read in. The modifiers are read in, the head of them
+ recorded, and when the identifier (or place where it is expected) is
+ reached, the identifier is registered as an ordinary ident if it exists.
+ The rest of the type is parsed, and then the next one is dealt with.
+
+** Add to the basic parse unit: a function to obtain the next identifier.
+    This will allow a crude decision to be made about expressions vs types.
+    It should return 'exp', 'typ' or 'bra'. Note that a prefix operation
+    will be 'exp', and the function will skip a first bracket, but will
+    report 'bra' if it finds a second one. (bra means 'I don't know')
+
+A variable points to, among other things, a type node. Type nodes report
+ and modify a basic type:
+                          
+The unset 'mod' value for a type node is zero which is interpreted as
+ an integer with auto linkage, but that should be changed to external
+ if the parser is outside any blocks.
+                                        
+?type,^name,^link,^next,^typtr,%size,%mod,%value
+                                                
+?type:
+        128 - typedef
+        129 - variable
+        130 - struct/union
+        131 - enum
+        132 - struct/union/enum entry (linked list, value=offset/0/value)
+
+
+Type specifiers: (bits 0,1,2 3,4,5)  NOTE: these only rqu'd 1ce for a type.
+      000 = int
+      001 = char
+      010 = float
+      011 = struct/union  (typtr to struct definition)
+      100 = enum          (typtr to enum definition)
+      101 = function (provisional, typtr to (return,operands,code))
+      110 = void
+      111 = FURTHER MODIFIERS (typtr to further node)
+
+    bit 3 = (un)signed   [ (un)set ]
+    bit 4 = (long)short
+    bit 5 = (not)double
+
+Linkage: (bits 6,7)        NOTE: This is not really type, but variable info.
+       00 = exernal    (extern)
+       01 = internal   (static)
+       10 = no linkage (auto)
+
+Storage class: (bits 8,9)   NOTE: This too, is only really variable info.
+       00 = auto    - default inside blocks
+       01 = static  
+       10 = extern  - default outside all blocks
+       11 = register
+
+Qualifiers: (bits 10,11)
+       bit 10 - const
+       bit 11 - volatile
+
+Declarators: (bits 12,13)
+       00 = identifier - but since all types are to be stored as
+                         abstract types, this will simply indicate that
+                         the base type is to be used.
+       01 = * [type qualifiers] declarator
+       10 = declarator '[[const expr]']  - ie const expr is optional.
+       11 = declarator ( [parameter list] ) - function type.
+              Note: Param list will generate auto variables, default type
+                    void, if no type given. Void corrected by 'old style'
+                    type definitions.
+
+Brackets show binding level. It would seem that ANSI allows this sort of
+ thing:
+
+             int (fred[20]={1,2,3})[4];
+
+ check this out...

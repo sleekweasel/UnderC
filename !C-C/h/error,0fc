@@ -1,0 +1,50 @@
+/*  error.h -- error and warning handling.
+ */
+
+##		Indent of errors. for debug clarification
+extern int   err_indent;
+
+extern int   switches,       /* front panel  anti-warn/ansi/doing */
+             lineswitches,   /* line-based   anti-warn/ansi/doing */
+             pragmaswitches; /* pragma-based anti-warn/ansi/doing */
+
+## #pragma [warn|ansi] [ on | off ]
+## #pragma doing [keep]
+##
+## Doing -- placemarking info		eg during compilation of 'main'
+## Warn  -- suspected logic error.	eg assignment in condition, un-()d.
+## Ansi  -- non ANSI standard used.	eg sys() or multi-char char const
+## Alert -- recovered from error.	eg '' read as '\0' or undecl id decl as int
+## Error -- irrecoverable error, no output.
+##									eg no : matching a ? clause
+## Failed-- compiler problem.		eg subblock nesting hyperextends the stack
+## Abort -- fatal condition.		eg no room
+
+enum { Doing, Warn, Ansi, Alert, Error, Failed, Abort };
+
+extern void printf( char * );
+extern void vprintf( char ** );
+
+## %% - %
+## %s - string to \0 or «null» is ptr==0, %$ - ctrls as 0xXX
+## %c - character
+## %t - token-number print
+## %T - token-structure print (needs work)
+## %S - Lengthed string. <len><string>
+## %W - Lengthed wide string. <len><string>
+## %x - Integer as 0xXXXXXXXX
+## %X - Integer as 0xXX
+## %i %d - Integer as decimal
+## %y - Tnode pointer, char (*(*[3])())[5] :== [3] * () * [5] char;
+## %Y - Tnode pointer, as %y, but a bit more info
+## %L - STnode pointer, list of idents printed
+## Other - %<whatever>
+
+extern void error( int, char * ); /* Generate error/concern */
+extern void verror( int, char ** ); /* Generate error/concern */ 
+
+extern int isalpha( char );   /* Note, this includes '_' */
+extern int isdigit( char );
+extern int isxdigit( char );
+
+extern void escapeabort();	/* Noop, but aborts on escape */

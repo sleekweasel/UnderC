@@ -1,0 +1,49 @@
+Linker (Not editor)
+-------------------
+
+Superceeding original idea (deleted). Linker implemented in !M-C.c.Linker
+
+First word of linked file is a BAL instruction to the start of the link chain
+ index. Thus the fourth byte will be an &EA in this first level of the linker.
+ Later versions will either use other branch instructions (eg BLAL, etc) or
+ something else to disqualify old style files, but since this compiler/linker
+ wo'n't escape before it's in C, I can belay that for the nonce.
+
+Code between the BAL and its destination is chained object code. This means
+ that relocating information is inside the object code as a word which both
+ needs replacing and holds the link to the next relocation word. The heads
+ of these chains are in the link chain index at the end of the file. Records
+ look like this:
+
+   00xxxxxx - BLLT instruction. Currently for `stackoverflow only (really),
+              but could be used elsewhere. eventually, all these branch
+              codes (including 01 next) will start (as 00 here) with the
+              real instruction, and only the xxxxxx will need resolving.
+              This 00, 03 is currently for pure convenience.
+
+   01xxxxxx - DCD offset to value request. 32 bit Mov. Currently code uses the
+              Ldr Rn,[PC]; OrA Rn, Rn, #(N << 28); DCD &XDDDDDDD, where X
+              is the NV condition. Compiler will do this properly, and
+              eliminate the need for this.
+
+   02xxxxxx - Much as 01, but for variable address requests.
+   03xxxxxx - As for 00, but for BL codes.
+
+The xxxxxx bits are straight bytewise offsets (no fishing about with PC offset
+ or multiplying by four) to the next record. Chain terminates with 0.
+
+After the chained object code comes the external identifier table (link chain
+ index), which is word aligned. (And pointed to by the very first word of
+ linked file)
+
+  "<filedefined>I" : DCB 0 : align : DCD size
+                           : DCD offset from codestart to allocated space
+                                   within individual file
+
+  "<externalref>I" : DCB 1 : align : DCD size
+                           : DCD offset from codestart to relocate chain
+                                Relocate chain is entry-relative offsets & type
+
+    Repeated as necessary (identifiers in alphabetical order) until
+
+  "TableEnd" : DCB 0 : align : DCD 0 : DCD 0

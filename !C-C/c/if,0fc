@@ -1,0 +1,290 @@
+
+#include "malloc.h"
+#include "error.h"
+#include "tree.h"
+#include "strings.h"
+#include "macro.h"
+#include "prepr.h"
+#include "if.h"
+
+/*  #IF...ELSE...ENDIF system runs independantly of the #include structure
+ *  with the exception that a closing file will warn if it leaves an open
+ *  conditional on this stack.
+ *
+ *   iflist -> last  = previous
+ *             seek  = if_pass          == Passes tokens etc ( == 0 )
+ *                     elif_seek        == Skips to elif or else
+ *                     endif_seek       == Skips non-endif
+ *                     endif_expecting  == Skips non-endif, and complains
+ *           incname = strdup(fname) - name of include file.
+ *
+ *  Record is only recyc'd on #endif.
+ *  Data passed on iff type == 0 except for strong eofs.
+ */
+
+extern IFnode *iflist=0;
+extern int             iflines_flag=0;
+
+
+extern void destruct_ifs() { /* Clear up on abort */
+}
+
+static int eval_test(char **lptr, int priority) {
+  int ret;
+
+  if (**lptr==0) { error(Error,"Missing number in #if or #elif conditional");
+                   return 0; }
+
+  if (isalpha(**lptr)) {
+    while (isalpha(**lptr)) ++*lptr;
+    *lptr=skiphead(*lptr);
+    ret=0;
+  }
+  else
+  if (isdigit(**lptr)) {  /* * * * * * * * * * * * * * * * * * * * * * * * * *
+                           *  PROBABLY NEEDS A FULL DEC/OCT/HEX DECODE HERE. *
+                           * * * * * * * * * * * * * * * * * * * * * * * * * */
+    ret=0;
+    while (isdigit(**lptr)) ret=ret*10+(*(*lptr)++-'0');
+    while (**lptr && **lptr!=' ') ++*lptr;
+    *lptr=skiphead(*lptr);
+  }
+  else
+  if (*(1+*lptr)==' ')
+    if (**lptr=='(') {
+      *lptr=skiphead(++*lptr);
+      ret = eval_test( lptr, 0 );
+      if (**lptr!=')') error(Error,"Missing ')' in #if or #elif conditional");
+                  else *lptr=skiphead(++*lptr);
+    } else
+    if (**lptr=='!') { *lptr=skiphead(++*lptr); ret=!eval_test(lptr,12); } else
+    if (**lptr=='~') { *lptr=skiphead(++*lptr); ret=~eval_test(lptr,12); } else
+    if (**lptr=='+') { *lptr=skiphead(++*lptr); ret= eval_test(lptr,12); } else
+    if (**lptr=='-') { *lptr=skiphead(++*lptr); ret=-eval_test(lptr,12); }
+
+  if ( priority < 11 ) /* Use < for left to right */
+    while ( strchr("*/%",**lptr) && *(1+*lptr)==' ' ) {
+      if ( **lptr=='*' ) { *lptr=skiphead(++*lptr); ret*=eval_test(lptr,11); }
+      else {
+        int div; char ch; ch=**lptr;
+        *lptr=skiphead(++*lptr);
+        div=eval_test(lptr,11);
+error(Doing,"Division is %i/%i, but not yet written, of course",ret,div);
+        if ( div==0 ) error(Error,"Divisor in #if or #elif is zero!");
+        else if ( ch=='/' ) ret/=div; else ret%=div;
+      }
+    }
+
+  if ( priority < 10 )
+    while ( strchr("+-",**lptr) && *(1+*lptr)==' ' ) {
+      int num; char ch; ch=**lptr;
+      *lptr=skiphead(++*lptr);
+      num=eval_test(lptr,10);
+      if ( ch=='+' ) ret+=num; else ret-=num;
+    }
+
+  if ( priority < 9 )
+    while ( strchr("<>",**lptr) && **lptr==*(1+*lptr) && *(2+*lptr)==' ' ) {
+      int num; char ch; ch=**lptr;
+      *lptr=skiphead(2+*lptr);
+      num=eval_test(lptr,9);
+      if ( ch=='<' ) ret<<=num; else ret>>=num;
+    }
+
+  if ( priority < 8 )
+    while ( strchr("<>",**lptr)
+            && ( *(1+*lptr)==' ' || ( *(1+*lptr)=='=' && *(2+*lptr)==' ' ) ) ) {
+      int num; char ch, c2; ch=**lptr; c2=*(1+*lptr);
+      *lptr=skiphead(1+(c2=='=')+*lptr);
+      num=eval_test(lptr,8);
+      if ( ch=='<' ) if ( c2=='=' ) ret=ret<=num; else ret=ret<num;
+                else if ( c2=='=' ) ret=ret>=num; else ret=ret>num;
+    }
+
+  if ( priority < 7 )
+    while ( strchr("=!",**lptr) && *(1+*lptr)=='=' && *(2+*lptr)==' ' ) {
+      int num; char ch; ch=*(1+*lptr);
+      *lptr=skiphead(2+*lptr);
+      num=eval_test(lptr,7);
+      if ( ch=='=' ) ret=ret==num; else ret=ret!=num;
+    }
+
+  if ( priority < 6 )
+    while (**lptr=='&' && *(1+*lptr)==' ')
+       { *lptr=skiphead(1+*lptr); ret=ret & (eval_test(lptr,6)); }
+
+  if ( priority < 5 )
+    while (**lptr=='^' && *(1+*lptr)==' ')
+       { *lptr=skiphead(1+*lptr); ret=ret ^ (eval_test(lptr,5)); }
+
+  if ( priority < 4 )
+    while (**lptr=='|' && *(1+*lptr)==' ')
+       { *lptr=skiphead(1+*lptr); ret=ret | (eval_test(lptr,4)); }
+
+  if ( priority < 3 )
+    while (**lptr=='&' && *(1+*lptr)=='&' && *(2+*lptr)==' ' )
+       { *lptr=skiphead(2+*lptr); ret=eval_test(lptr,3) && ret; }
+
+  if ( priority < 2 )
+    while (**lptr=='|' && *(1+*lptr)=='|' && *(2+*lptr)==' ' )
+       { *lptr=skiphead(2+*lptr); ret=eval_test(lptr,2) || ret; }
+
+   /* Sneaky 'bug' here -- || and && only eval second if needed for result. */
+
+  if ( priority < 1 )
+    while (**lptr==',' && *(1+*lptr)==' ')
+       { *lptr=skiphead(1+*lptr); ret=eval_test(lptr,1); }
+
+  *lptr=skiphead(*lptr);
+
+  return ret;
+}
+
+static int if_test(char *lptr) {
+  int ret;
+  ret = eval_test(&lptr, 0);
+  lptr=skiphead(lptr);
+  if ( *lptr ) error(Error,"Ignoring extra text on #if or #elif conditional");
+  if ( iflines_flag ) error(Doing,"#If test result was %i",ret);
+  return ret;
+}
+
+static int eval_if(char **line, char *lptr) {
+  /* contract  define id  and  define(id)
+   *  ( and incidentally shuffle back to start at *line )
+   */
+
+  { char *from, *to;
+    to=*line, from=lptr;
+    while ( *from )
+      if ( *from<=' ' ) *to++=*from++;
+      else {
+        char *past, p, cmp;
+        past=steptoken(from);  /* Supposed to get 'defined' */
+        p=*past; *past=0;
+        cmp=strcmp(from, "defined"); *past=p;
+        if ( !cmp ) {
+          int brak; char *pass; *to++=' '; /* Overwrites 'defined' */
+
+          past=skiphead(past);
+          if ( brak=(*past=='(')) past=skiphead(past+1);
+
+          pass=steptoken(past); /* Supposed to get 'identifier' */
+
+          if ( isalpha(*past) ) {
+            MACnode *macro; char p;
+            p=*pass; *pass=0;
+            macro=seekfind(past,macrotree);
+            if ( macro && macro->body ) *to++='1'; else *to++='0';
+            *pass=p; past=pass;
+          } else {
+            error(Error,"Missing identifier for 'defined ()'");
+            *to++='0';
+          }
+          *to++='L'; *to++=' '; /* overwrites 'defined' */
+
+          if ( brak ) {
+            char *pass;
+            pass=skiphead(past);
+            if ( *pass!=')' ) error(Error,"Missing ')' after 'defined ('");
+                         else past=pass+1;
+          }
+          from=past; 
+        } else {
+          char *past;            /* token wasn't 'defined' */
+          past=steptoken(from);
+          memmove(to, from, past-from);
+          to+=past-from; from=past;
+        }
+      }
+    *to=0;
+  }
+  /* macro replace line */
+
+  *line=macroexpand(*line); /* Line is also now tokenised-monospace */
+
+  /* Evaluate to 0 or 1 ... eek! Ids eval to 0. */
+
+  return if_test(*line);
+
+}
+
+extern void do_if     (char *line, char *lptr) {
+  IFnode *tmp;
+  tmp=malloc( sizeof(IFnode) );
+  tmp->incname=strdup(fname);
+  tmp->incdepth=incdepth;
+  tmp->last=iflist;
+  if ( iflist && iflist->seek!=if_pass ) {
+    if ( iflines_flag ) error(Doing,"Found #if during elif/else/endif search");
+    tmp->seek=endif_seek;
+  } else {
+    if ( iflines_flag ) error(Doing,"Trying #if %s",lptr);
+    if (eval_if(&line, lptr)) tmp->seek=if_pass;
+                         else tmp->seek=elif_seek;
+  }
+  iflist=tmp; free(line);
+}
+
+extern void do_ifdef( (char *line, char *lptr) {
+  char *lpt2; MACnode *macro;
+  lpt2=steptoken(lptr); *lpt2=0;
+  macro=seekfind(lptr,macrotree);
+  if ( macro && macro->body ) *lptr='1'; else *lptr='0';
+  *(lptr+1)=0;
+  do_if(line,lptr);
+}
+
+extern void do_ifndef (char *line, char *lptr) {
+  char *lpt2; MACnode *macro;
+  lpt2=steptoken(lptr); *lpt2=0;
+  macro=seekfind(lptr,macrotree);
+  if ( macro && macro->body ) *lptr='0'; else *lptr='1';
+  *(lptr+1)=0;
+  do_if(line,lptr);
+}
+
+extern void do_endif  (char *line, char *lptr) {
+  if ( iflist ) {
+    IFnode *tmp;
+    if ( iflines_flag ) error(Doing,"Found #endif");
+    free(iflist->incname);
+    tmp=iflist->last;
+    free(iflist); iflist=tmp;
+  } else
+    error(Error,"Extraneous #endif found.");
+  free(line);
+}
+
+extern void do_elif   (char *line, char *lptr) {
+  if ( iflist==0 ) error(Error,"#elif found outside #if..#endif");
+  else {
+    if ( iflist->seek == elif_seek ) {
+      if ( iflines_flag ) error(Doing,"Found #elif %s  during elif_seek",lptr);
+      if ( eval_if(&line,lptr) ) iflist->seek=if_pass;
+    } else
+      if ( iflist->seek == endif_expecting )
+                                       error(Error,"#elif found after #else");
+      else {
+        if ( iflines_flag )
+                      error(Doing,"Found #elif during endif_seek or if_pass");
+        iflist->seek = endif_seek;
+      }
+  }
+  free(line);
+}
+
+extern void do_else   (char *line, char *lptr) {
+  if ( iflist==0 ) error(Error,"#else found outside #if..#endif");
+  else {
+    if ( iflines_flag ) error(Doing,"Found #else");
+    if ( iflist->seek == elif_seek ) iflist->seek=if_pass;
+    else
+      if ( iflist->seek == endif_expecting )
+                                        error(Error,"#else found after #else");
+                                   else iflist->seek=endif_expecting;
+  }
+  free(line);
+}
+
+/*---------------------------------------------------------------------------*/

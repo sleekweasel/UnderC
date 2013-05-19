@@ -1,0 +1,11 @@
+/* malloc.h - Goes with RunAsb.o
+ *
+ * Author - Tim Baverstock (c) 20/8/1991
+ *
+ *          Dedicated to Jesus.
+ */
+
+extern void* malloc(int);
+extern void* realloc(void*, int);
+extern void  free(void*);
+

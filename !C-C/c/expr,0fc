@@ -1,0 +1,423 @@
+
+#echo	expr.c - Expression builder.  (Operator precedence parser)
+##
+##	Symbolic tokens are in the correct order for precedence checking.
+##	Returns a tree of enodes:
+##
+##		node:	enode:	left, right,
+##						type	==	type ptr	(eg ->int,  ->*->char )
+##				int:	is		==	Enum const	(eg Times, Ident )
+##						data	==	other data	(eg Id name, const data)
+##						width	==	width of expression in registers
+##
+##	Also provides a destructor facility.
+##
+##	Unary	operators:	Expression hangs from ->right
+##  Binary	operators:	Expressions hang from ->left and ->right
+##	Query	operator:	Expressions hang from ->data ? ->left : ->right
+##
+##	Exceptions: Ident, IntConst, RealConst, String, WideStr, from ->data
+##				CharConst, WideChar, ->data is a value
+##				SizeOf ->left  is a type, else 0
+##					or ->right is an expression, else 0
+##					or ->data is size in bytes ( from typeof() )
+##				Dot and Arrow have expression from ->right,
+##					if ->data>=0, field in ->data is valid byte offset.
+##					->Left="tag" where possible, ->type is type of tag.
+##				TypeCast has expression from ->right, but ->type is used.
+##					(You can get the expression's type from ->right->type)
+##
+##	Want to fold constants. This is for two reasons; for eventual optimisation,
+##	but also for the 'constant expression' of:
+##		struct bitfields, enum intialisers, array sizes, case constants;
+##			these may not contain assignments, inc/dec, function calls or
+##			comma ops, arrays, indirection, address-of and structure operators.
+##		Intialisers;
+##			may contain an explicit or implicit address-of operator. Such
+##			initialisers must evaluate to a constant, or the address of a
+##			previously declared object +/- a constant.
+##
+##		To this end, nodes are classified into these groups:
+##			Constant	-	If given to the compilation routine with -1 in
+##							'regs free', returns a simple constant-type node.
+##			Initialiser	-	As constant, but returns address+/-longconst.
+##			Expression	-	Unrepresentable as anything other than an expr tree.
+##
+##  An expression is an lvalue if it's a deref, Arrow, Dot, Array, or an
+##		identifier. Brackets make no difference, but Const does :)
+##		Typecast doesn't affect lvalue, and Query supplies lvalue, but
+##		both results of Query should be type-equivalent.
+##
+##	A node inherits the greater of its children's groups. Except for address-of
+##		which implies Initialiser, and for assigns, inc/dec, function calls,
+##		comma ops, arrays, indirection, and structure operators which imply at
+##		least Expression.
+##
+
+#include "malloc.h"
+#include "error.h"
+#include "strings.h"
+#include "expr.h"
+#include "types.h"
+#include "exprtype.h"
+#include "struct.h"
+#include "tokens.h"
+
+#echo expr.c
+
+##--------------------------------------------------------------------------
+static
+int active=0,	/* Use of assignment operators (for conditions and return)	*
+				 *  to trap things like if ( a=b )  or return *a=*b;		*/
+	passive=1;	/* Use of no assignops or postinc type outside function call *
+				 *  to trap things like printf()+4 or foo()+bar();			 */
+		/* These are distinct because (eg) function calls clear both */
+
+static int alt(int tokval) {
+							/* Return alternate token names (for prefix ops) */
+	if ( tokval == PostInc	) return PreInc;
+	if ( tokval == PostDec	) return PreDec;
+	if ( tokval == BitAnd	) return AddressOf;
+	if ( tokval == Add		) return Positive;
+	if ( tokval == Take		) return Negative;
+	if ( tokval == Times	) return Star;		/* Cop-out. Should be 'Deref' */
+  return tokval;
+}
+
+static Enode *int_parseexpr(int prec);
+
+static void tryLtoR(int Low, int High, int prec, Enode **ret, Token **see) {
+	error(Doing,"F:tryLtoR(%t, %t, %t, %x, %T)",Low,High,prec,ret,*see);
+	error(Doing,"F: %t > %t %d; %t <= %t %d; %t <= %t %d",prec,Low,prec > Low,Low,(*see)->is,Low<=(*see)->is,(*see)->is,High,(*see)->is<=High);
+	if ( prec > Low ) { /* Left to right */ /* Changed from High */
+		while ( Low<=(*see)->is && (*see)->is<=High ) {
+			Enode *steal; steal=new_enode();
+			steal->left=*ret; steal->is=(*see)->is;
+			steal->right=steal->type=steal->data=0;
+			error(Doing,"F:tryLtoR take %T for %E",*see, steal);
+			*see=taketoken();
+			steal->right=int_parseexpr(Low);  /* Changed from see->is */
+			steal->type=typeof(steal); /* type of ret from ->left/->right */
+			*ret=steal;
+		}
+	}
+}
+
+static Enode *parseargexpr( void ) {
+	Enode *ret;  Token *see;
+	int stactive, stpassive;
+	error(Doing,"E:parseargexpr");
+	if ( (see=seetoken(), see->is)==CloseBracket ) {
+									/* Return ... if no parameters */
+
+##		ret=new_enode();
+##		ret->left=ret->right=0; ret->is=Ellipsis;
+##		ret->data=0; ret->type=Void;
+##		error(Warn,"I may not have supplied void here - expr.c:parseargexpr()");
+##		return ret;
+
+		return 0 /*NULL*/;
+	}
+
+/*   This returns types effectively in reverse order: (((a,b),c),d)
+     This bit should check the typedata as it goes. typecmp()? stlneq()? */
+
+	stactive=active; stpassive=passive;
+	ret=int_parseexpr(Comma); /* Get first param */
+	error(Doing,"E:parseargexpr first gained %E",ret);
+
+	while ( (see=seetoken(), see->is)<=Comma &&
+			see->is!=CloseBracket && see->is!=eof ) {
+		Enode *steal; steal=new_enode();
+		eatatoken(Comma,"Supplied missing comma in argument list");
+		steal->is=Comma | Alt_Q;
+		steal->left=ret; steal->data=0;
+		steal->right=int_parseexpr(Comma);
+		error(Doing,"E:parseargexpr gained %E",steal->right);
+		steal->type=typeof(steal); /* Returns type of ret from ->left/->right */
+		ret=steal;
+	}
+	active=stactive; passive=stpassive;
+	error(Doing,"E:parseargexpr returns %E",ret);
+	return ret;
+}
+
+static Enode *int_parseexpr(int prec) {
+
+##			Parse tokens until operator of precedence prec
+##			     (Typically Comma or SemiColon).
+##
+##			Note: precedence will not simply be tok->is
+##
+
+	Enode *ret; Token *see;
+
+	error(Doing,"E:int_parseexpr(%t)",prec);
+
+	see=seetoken(); ret=0;
+
+##
+## Need to parse primary, postfix, unary and cast here. First thing to read
+##  always is a number.  If ret is 0 at the end, means a missing operand.
+##
+
+#warn 2x[to be checked] - Removal of auto deref is okay
+
+	if ( see->is<Ellipsis || ( see->is==OpenBracket && !istype(1) ) ) {
+
+##		Primary expression:
+##		Take a token with ->data: Ident, Number, (W)Char, (W)String.
+##		or (expression) [not (typecast)]
+
+		ret=new_enode();
+		error(Doing,"E:new_enode()=%x",ret);
+		ret->left=ret->right=ret->data=0; ret->type=0;
+		if ( see->is<OpenBracket ) {
+##		Primary expression: Ident, Number, (W)Char, (W)String.
+			error(Doing,"E:Primary %T",see);
+			ret->is=see->is; ret->data=see->data;
+			see->is=0; see->data=0;
+			taketoken();
+			error(Doing,"E:Primary-end (made %E)",ret);
+		} else {
+##		Primary expression: (expression) [not (typecast)]
+			error(Doing,"E:Primary () %T",see);
+			ret->is=OpenBracket; taketoken();
+			ret->right=int_parseexpr(SemiColon);
+			eatatoken(CloseBracket, "Missing ) in expression");
+			error(Doing,"E:Primary ()-end made %E",ret);
+		}
+		ret->type=typeof(ret);
+		error(Doing,"E:Have Primary %E",ret);
+##
+##   Have a primary now, so deal with postfixes.
+##
+		see=seetoken(); /* Get next token. Last destroyed in prev paragraph */
+
+		while ( see->is==OpenBracket ||
+				see->is==OpenArray   ||
+				( Dot<=see->is && see->is<=PostDec ) ) {
+			Enode *new; new=new_enode();
+			error(Doing,"E:Postfix %T",see);
+			if ( Dot<=see->is && see->is<=PostDec ) {
+##	Dot, Arrow, PostInc, PostDec
+				new->is=see->is; taketoken();
+				new->data=0; new->right=ret; ret=new;
+				if ( new->is==Dot || new->is==Arrow ) parsefield(new);
+				else new->left=0, active=1;
+				see=seetoken();
+			}
+			else {
+				if ( see->is==OpenBracket ) {
+					new->is=Function; taketoken();
+					new->left=ret; ret=new; new->data=0;
+					new->right=parseargexpr();
+					eatatoken(CloseBracket,"Missing ) after argument list");
+					active=1;
+				} else {
+					/* see->is === OpenArray */
+						new->is=OpenArray; taketoken();
+						new->left=ret; ret=new; new->data=0;
+						new->right=int_parseexpr(SemiColon);
+						eatatoken(CloseArray,
+									"Missing ] after array expression");
+				}
+				see=seetoken();
+			}
+			ret->type=typeof(ret);
+			error(Doing,"E:Try for postfix %T having %E",see,ret);
+		} /* while () */
+		error(Doing,"E:Done with postfixes %T have %E",see,ret);
+	}
+
+	else /* Don't parse prefix types after primary/postfix expressions */
+
+	if ( PreInc<=alt(see->is) && alt(see->is)<=LogNot )
+	{
+## PreInc, PreDec, SizeOf, AddressOf, Star, Positive, Negative, BitNot, LogNot			error(Doing,"E:Preinc %T",see);
+		ret=new_enode();
+		ret->is=alt(see->is); ret->data=0; ret->left=0;
+		if ( AddressOf<=ret->is && ret->is<=LogNot )
+		{
+## AddressOf, Star, Positive, Negative, BitNot, LogNot
+			taketoken();
+			ret->right=int_parseexpr(Typecast);
+			if (ret->right==0) error(Error,"Missing operand for '%t'",ret->is);
+		}
+		else if ( ret->is!=SizeOf )
+		{
+## PreInc, PreDec
+			taketoken();
+			active=1, ret->right=int_parseexpr(PreInc);
+			if (ret->right==0) error(Error,"Missing operand for '%t'",ret->is);
+		}
+		else
+		{
+## SizeOf
+			see=taketoken();
+			if ( see->is==OpenBracket && istype(1) )
+			{
+## sizeof(type)
+				eatatoken(OpenBracket, "Odd - This should have been a (");
+				ret->left=typename(); ret->right=0;
+				if (ret->left==0) error(Error,"No type provided for sizeof()");
+				else {
+					error(Doing,"E: sizeof TYPE %s %Y",ret->left,ret->left);
+					ret->data=typsize(ret->left);
+				}
+				eatatoken(CloseBracket, "Expected ) to close sizeof()");
+			} else {
+## sizeof expression
+				int stpassive, stactive;
+				stpassive=passive; stactive=active;
+				ret->right=int_parseexpr(LogNot);
+				passive=stpassive; active=stactive;
+				if (ret->right==0) error(Error,"Missing operand for sizeof");
+				else {
+					Tnode *typ;
+					error(Doing,"E: sizeof EXPR %s %E",ret->right,ret->right);
+					typ=typeof(ret->right);
+					error(Doing,"E: sizeof ETYP %s %Y",typ,typ);
+					ret->data=typsize(typ);
+				}
+			}
+		}
+		ret->type=typeof(ret);
+		if ( !ret->type ) error(Failed,"int_parseexpr() prefix's typeof returned NULL");
+		error(Doing,"E:Have prefix which is %Y %E",ret->type,ret);
+		see=seetoken();
+	}
+
+	else /* Don't parse casts after primary/postfix expressions */
+
+	if ( prec>=Typecast && see->is==OpenBracket && istype(1) )
+	{
+		error(Doing,"E:Cast %T",see);
+		ret=new_enode();
+		ret->is=Typecast; ret->data=0; ret->left=0;
+		taketoken();
+		ret->type=typename();
+		if (ret->type==0) error(Error,"Missing type for typecast");
+		eatatoken(CloseBracket, "Missing ) for typecast");
+		ret->right=int_parseexpr(Typecast);
+		if (ret->right==0) error(Error,"Missing expression to typecast");
+		see=seetoken();
+	} else ;
+
+	if ( ret==0 )  {
+		error(Error,"Missing operand in expression. Substituting 1L");
+		ret=new_enode();
+		ret->left=ret->right=0;
+		ret->is=IntConst; ret->data=strdup("1L"); ret->type=typeof(ret);
+	} else;
+
+	error(Doing,"E:tryLtoR block %T and %E",see,ret);
+
+	tryLtoR(Times, Mod, prec, &ret, &see);
+	tryLtoR(Add, Take,  prec, &ret, &see);
+	tryLtoR(LeftShift, RightShift,  prec, &ret, &see);
+	tryLtoR(LessThan, GreaterEqual, prec, &ret, &see);
+	tryLtoR(IsEqual, NotEqual,      prec, &ret, &see);
+	tryLtoR(BitAnd, BitAnd, prec, &ret, &see);
+	tryLtoR(BitEor, BitEor, prec, &ret, &see);
+	tryLtoR(BitOr,  BitOr,  prec, &ret, &see);
+	tryLtoR(LogAnd, LogAnd, prec, &ret, &see);
+	tryLtoR(LogOr,  LogOr,  prec, &ret, &see);
+
+	error(Doing,"E:tryLtoR block end %T and %E",see,ret);
+	
+	while (0);
+
+## Query/Colon: Query puts condition into data, true/false into left/right
+
+	if ( prec >= Query )  /* Colon purposely allowed to slip through */
+		error(Doing,"E:Query entry %T with %E",see,ret);
+		if ( see->is==Query ) {
+			Enode *nu; nu=new_enode();
+			nu->is=Query;
+			taketoken();
+			nu->data=ret; nu->left=int_parseexpr(SemiColon);
+
+#warn 2x[to be checked] - Removal of auto deref is okay
+
+			if ( ! eatatoken(Colon, "Missing : for ?. Effecting :0") ) {
+				Enode *fix; fix=new_enode();
+				fix->is=IntConst; fix->data=strdup("0");
+				fix->left=fix->right=0;
+				fix->type=typeof(fix);
+				nu->right=0;
+			} else {
+				nu->right=int_parseexpr(Query);
+			}
+			nu->type=typeof(nu); /* type of ret from ->left, ->right */
+			ret=nu;
+			error(Doing,"E:Query ended with %E",ret);
+			see=seetoken();
+		}
+
+	if ( prec >= OrEqual ) { /* Right to left */
+		error(Doing,"E:OrEqual %T with %E",see,ret);
+		if ( Assign<=see->is && see->is<=OrEqual ) {
+			Enode **stealptr, *new; new=new_enode();
+
+			active=1;  /* TRUE */
+			passive=0; /* FALSE */
+
+## Set stealptr to ptr to first unary-operator node in ret */
+			if ( ret->is>=Typecast && ret->right )
+				error(Error,"Assignment needs bracketing (stealing from higher precedence)");
+			stealptr=&ret;
+			error(Doing,"E:Stealing from %E for %T",*stealptr,see);
+			while ( (*stealptr)->is >= Typecast && (*stealptr)->right )
+				stealptr=&(*stealptr)->right;
+			error(Doing,"E:Stealing %E from %E for %T",*stealptr,ret,see);
+			new->left=*stealptr; new->is=see->is; new->data=0; new->right=0;
+			error(Doing,"E:Theft result %E",new);
+			taketoken();
+			new->right=int_parseexpr(OrEqual);
+			error(Doing,"E:Theft progression %E",new);
+			new->type=typeof(new); /* type of node from ->left, ->right */
+##
+##						Since type of assignment-op is ->left,
+##						 stealing like this has no effect on typechecking
+##
+			error(Doing,"E:Theft posttype %E (%x %x)",new,*stealptr,ret);
+			*stealptr=new;
+			error(Doing,"E:Assignop ended with %E",ret);
+			see=seetoken();
+		}
+	} else ;
+
+##		error(Doing,"E:Comma %T with %E",see,ret);
+
+	tryLtoR(Comma,  Comma,  prec, &ret, &see);
+
+		error(Doing,"E:ret.. %T with %E",see, ret);
+
+	if ( ret==0 )  {
+		error(Error,"Missing operand in (empty?) expression. Substituting 1");
+		ret=new_enode();
+		ret->left=ret->right=0;
+		ret->is=IntConst; ret->data=strdup("1"); ret->type=typeof(ret);
+	}
+
+	return ret;
+}
+
+## Expressions are terminated by ) or ; (eaten if correct).
+
+extern Enode *parseexpr(int conditional, int endtok)
+{
+	Enode *ret;
+
+	active=0; passive=1;
+
+	error(Doing,"E:parseexpr(%t)",endtok);
+	ret=int_parseexpr(endtok);
+
+	if ( conditional==0 && !active )  error(Warn,"Passive statement suspected here");
+	if ( conditional==1 && !passive ) error(Warn,"Active expression given in conditional");
+	error(Doing,"E:Exit parseexpr(%t)=%E",endtok,ret);
+	return ret;
+}
+

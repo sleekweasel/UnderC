@@ -1,0 +1,454 @@
+
+## Linker.c - 1.0 - Belongs, like the rest of this program set, to Jesus.
+##
+## This takes a directory of files, and links the object files (ie those
+##  with filetype &0F0) into one executable called aout, and leaves it
+##  in the directory.
+##
+## First object file format (Object file because of filetype):
+##
+##  BAL <offset to table> - &EAxxxxxx   (ie fourth byte = &EA)
+##
+##  <code block, and file-defined variable space>
+##
+##  [ external identifier table starts (word aligned) ]
+##
+##  "<filedefined>I" : DCB 0 : align : DCD size
+##                           : DCD offset from codestart to allocated space
+##
+##  "<externalref>I" : DCB 1 : align : DCD size
+##                           : DCD offset from codestart to relocate chain
+##                           \ Relocate chain is entry-relative offsets & type
+##
+##    Repeated as necessary (identifiers in alphabetical order) until
+##
+##  "TableEnd" : DCB 0 : align : DCD 0 : DCD 0
+
+
+typedef struct idtr {
+	struct idtr *left, *right;	/* Tree links */
+		char	*name;			/* Ident name */
+		int		 offset,		/* Ident location */
+				 reloc,			/* Start of relocation chain */
+				 size,			/* Size..? */
+				 filix,			/* Index of file ident def'd in */
+				 usix;			/* Index of first free entry of used[] */
+		int		 used[32];		/* Indices of using files */
+} idtr;
+
+static void *malloc(int);
+static void *realloc(void*, int);
+static void  free(void*);
+
+static char *strcopy(char *a, char *b) {
+	for (; *a; *b++=*a++); *b=*a;
+	return b;
+}
+
+static int strcmp(char *a, char *b) {
+	for (; *a && *b==*a; a++,b++);
+	return *a-*b;
+}
+
+static int length(char *a) {
+	int c;
+	for (c=1; *a; a++, c++);
+	return c;
+}
+
+static int printf(char *s /* ... */) {
+	char buf[20];
+	int *par; par=&s+1;
+	while ( *s )
+	{
+		if ( *s==10 ) sys(0x10D);
+		if ( *s!='%' ) sys("OS_WriteC",*s);
+		else
+		{
+			s++;
+			if ( *s=='s' ) {
+				char *ch; ch=*par++;
+				if ( ch )
+					sys("OS_Write0",ch);
+				else
+					sys("OS_Write0","«null»");   
+			}
+			else
+			if ( *s=='x' ) {
+				sys("OS_ConvertHex8",(*par++,buf,19));
+				sys("OS_Write0",buf);
+			}
+			else
+			if (*s == 'd')  /* Int as decimal */
+			{
+				sys("OS_ConvertInteger4",(*par++,buf,19));
+				sys("OS_Write0",buf);
+			}
+			else
+			sys("OS_WriteC",*s);
+		}
+		s++;
+	}
+}
+
+static
+char	*cmdstr,		/* Pointer to command string */
+		*dirptr,		/* Pointer to directory to link */
+		*diroc,			/* Pointer to o in .o. to faff to .c. sometimes */
+		*dirtail,		/* Acron don't seem to have implemented all of OS_File*/
+		*files[32],		/* Pointers to leaf file names in the directory
+						 * NOTE the 32 is MAX_LINKABLES, but macro replacement
+						 *      is not implemented in BASIC-C. Will be in !M-C.
+						 */
+		*code;			/* Base address of linked program (eventually) */
+
+static
+int		linkfiles=0,	/* Number of linkable files in the directory */
+		codesize=0,		/* Length of code block */
+		offsets[32];	/* Offsets of symbol tables within .o files.
+						 *       (Obsolete?)
+						 */
+
+static struct idtr *idents;		/* Root of identifier tree */
+
+## Main identifier handling procedure
+##
+## Returns the entry corresponding to *id. If one does not exist, one is
+##  made for *id and returned.
+##
+## The identifiers are sorted, so a tree is not the best structure, but
+##   it's my favourite and easy to program. Maybe change to a hash table.
+
+
+static struct idtr *newnode( char *id )
+{
+	struct idtr *nu; nu=malloc( sizeof(idtr) );
+	strcopy( id, nu->name = malloc(length(id)) );
+	nu->offset = nu->reloc = -1;
+	nu->left = nu->right = 0;
+	nu->usix=0; nu->filix=0;
+	return nu;
+}
+
+
+static struct idtr *search(char *id, struct idtr *tree) {
+	int dir;
+
+	if ( (dir=strcmp(id,tree->name)) == 0 )
+		return tree;
+	if ( dir < 0 )
+		if ( tree->left ) return search(id, tree->left);
+		else return tree->left=newnode( id );
+	else
+		if ( tree->right ) return search(id,tree->right);
+		else return tree->right=newnode( id );
+}
+
+/* Noddy front end for search(). I really don't know why I bothered... */
+
+static idtr *entry(char *id) {
+	return search(id,idents);
+}
+
+/* Returns code size of .o file given */
+
+static int givesize(char* file) {
+	int channel, size;
+
+	if (dirptr!=dirtail) *dirtail++='.';
+	strcopy(file,dirtail);
+
+	sys("OS_Find",(0x4C,dirptr),(channel)); /* Open file */
+
+	sys("OS_GBPB",(3,channel,&size,4,0)); /* Nasty way of reading size in... */
+
+	size = (0xFFFFFF & size)*4+4;
+		/* Addition of 8 converts to a true (non-pipelined) offset
+		 * But subtract 4 for elimination of branch instruction
+		 */
+
+	sys("OS_Find",(0,channel));			/* Close file */
+
+	if (dirptr!=dirtail) dirtail--;
+	*dirtail=0;
+
+	return size;
+}
+
+/* Finds the directory to link from and records all the linkables therein */
+
+static int getfiles() {
+	int codesize; codesize=0;
+
+	sys("OS_GetEnv",,(cmdstr));
+
+	/* Expecting: linker <single_object_file>
+	 *  Note that the mentioned file needn't even be an object file
+	 *                                since we want the directory only.
+	 */
+
+	/* Extract directory name from command string */
+
+	for (dirptr=cmdstr; *dirptr>' '; dirptr++); /* Hit a space or end of line */
+	for (; *dirptr==' '; dirptr++);
+	if (*dirptr<' ') *dirptr=0;
+	else {
+		char *dpt;
+		for (dpt=dirptr; *dpt>' '; dpt++); /* Stop on terminator of filename */
+		*dpt=0;
+		for (; *dpt!='.' && dpt!=dirptr; dpt--);
+		if (*dpt=='.' || dpt==dirptr) *dpt=0;
+	}
+
+	{
+		char *dpt;
+		dpt=malloc(256);
+		dirtail=strcopy(dirptr,dpt); dirptr=dpt;
+		diroc=0;
+		if ( dirtail>dirptr+2 && dirtail[-2]=='.' && dirtail[-1]=='o' )
+			diroc=dirtail-1;
+	}
+
+	/* Now extract the object file names from the deduced directory */
+
+	{
+		int	 offset,
+			 read,
+			*fileint;	/* exists because I've not written typecasting */
+
+		char *fileinfo;
+
+		offset=0; fileinfo=fileint=malloc(256); /* This is free()d later */
+
+		do {
+			do {  /* Ensure reading of one filename */
+				sys("OS_GBPB",(10,dirptr,fileinfo,1,offset,64,0),
+					(,,,read,offset));
+			} while (read==0 && offset!=-1);
+			if (read==1) {
+				if ( (*fileint >> 8) == 0xFFF0F0 ) {
+					/* Object is of type 0x0F0 - CObject */
+
+     /* Don't bother recording RunAsb because it is automatically stuck
+      *   on the end. ( And it must also always be there )
+      */
+
+					if ( strcmp(fileinfo+20,"RunAsb")!=0 ) {
+						strcopy(fileinfo+20,files[linkfiles]=malloc(20));
+						offsets[linkfiles]=givesize(files[linkfiles]);
+						codesize+=offsets[linkfiles++];
+					}
+				}
+			}
+		} while ( offset!=-1 && linkfiles<31 );
+
+		if ( linkfiles==31 ) {
+			sys("OS_Write0","Too many files for linker.");
+			return 0;
+		};
+
+ /* RunAsb at the end always */
+		strcopy("RunAsb",files[linkfiles]=malloc(20));
+		offsets[linkfiles]=givesize(files[linkfiles]);
+		codesize+=offsets[linkfiles];
+
+		free(fileinfo);
+	}
+	if (*dirptr) *dirtail++='.';
+	*dirtail=0;
+	return codesize;
+}
+
+/* Load in the named file and link the externs in */
+
+static void linkfile(int index, char* codeptr) {
+	int channel, idlen, ptr, linkage;
+	char *id;
+	struct idtr *item;
+	printf("Loading %s",files[index]);
+
+	id=malloc(idlen=32);
+
+	strcopy(files[index],dirtail);
+
+	if ( diroc ) {
+		int otyp, oloa, oexe; /* Would have used unsigned, */
+		int ctyp, cloa, cexe; /* but unsigned wasn't implemented */
+		*diroc='c'; sys("OS_File",(17,dirptr),(ctyp,,cloa,cexe));
+		*diroc='o'; sys("OS_File",(17,dirptr),(otyp,,oloa,oexe));
+		cloa=(cloa&255)<<1; oloa=(oloa&255)<<1;
+		if ( cexe & 0x80000000 ) cloa++, cexe=cexe & ~0x80000000;
+		if ( oexe & 0x80000000 ) oloa++, oexe=oexe & ~0x80000000;
+		if ( ctyp && ( cloa>oloa || ( cloa==oloa && cexe>oexe ) ) )
+			printf(" (.c file is younger)");
+	}
+	else ;
+
+	printf("\n");
+
+	sys("OS_Find",(0x4C,dirptr),(channel));
+
+	sys("OS_GBPB",(3,channel,codeptr,offsets[index],4),(,,,,linkage));
+			/* Read code in. (Maybe consider incomplete transfer) */
+
+	/* File read in, now start thinking about linking chains together. */
+
+	do {
+		char *ide;
+		int  ideln; ide=id; ideln=0;
+
+   /* Read in the identifier and linkage info */
+
+		do {
+			sys("OS_BGet",(,channel),(*ide)); ideln++;
+			if (ideln>=idlen) {ide=ideln+(id=realloc(id,32)); idlen+=32; };
+		} while (*ide++>' ');
+
+		linkage=*--ide; *ide=0; item=entry(id);
+		{ int *us; us=&item->used; us[item->usix]=index; item->usix++; }
+		sys("OS_Args",(0,channel),(,,ptr)); ptr=(ptr+3) & ~3;
+		sys("OS_GBPB",(3,channel,&item->size,4,ptr));
+while(0);
+
+		if (linkage)
+		{
+			int root,head, *codeint;
+			sys("OS_GBPB",(4,channel,&root,4)); head=root;
+			if ( root!=0 )
+			{
+				if (item->reloc!=-1)
+				{
+					codeint=(root+=codeptr-4);
+					while (*codeint & 0xFFFFFF)
+						codeint=root-=*codeint & 0xFFFFFF;
+					*codeint= (*codeint & 0xFF000000) | root-item->reloc;
+				}
+				item->reloc=head-4+codeptr;
+			}
+			else
+			{
+				item->usix--;
+			}
+		}
+		else
+		{
+			int offs;
+			sys("OS_GBPB",(4,channel,&offs,4));
+			if (item->offset!=-1 && strcmp(id,"TableEnd")!=0)
+			{
+				printf("Duplicate identifier: %s (%s)\n",id,files[item->filix]);
+			}
+			else
+			{
+				item->offset=offs+codeptr-4; item->filix=index;
+			}
+			if (index==linkfiles && item->reloc==-1) item->reloc=-2;
+				/* Don't complain about RunAsb's identifiers not being used. */
+		}
+	} while (strcmp(id,"TableEnd"));
+	free(id); sys("OS_Find",(0,channel));
+}
+
+## Resolve identifier tree.
+##
+##  0 - BLLT `stackoverf
+##  1 - DCD <OFFSET> for a value request (ie, a 32 bit Mov type instruction)
+##  2 - DCD <OFFSET> for an address request (ie an external/long Adr instr )
+##  3 - BL Function
+
+static void resolve(struct idtr *item) {
+
+	if (item->left)  resolve(item->left);
+
+	{
+		int *pointer, record, offs;
+		pointer=item->reloc;
+		if (pointer==-1)
+			/*printf("Unused, but defined: %s\n",item->name)*/;
+		else
+		if (pointer==-2) /* Don't report RunAsb's identifiers ignored */;
+		else
+		if (item->offset==-1)
+		{
+			int i, *us;
+			printf("Required, but undefined: %s\n  Ref'd: ",item->name);
+			i=0; us=&item->used;
+			while ( i<item->usix ) printf("%s ",files[us[i++]]);
+			printf("\n");
+		}
+		else
+		do {
+			record=*pointer;
+			if ( record>>24 == 0 ) {
+				*pointer = 0xBB<<24 |
+							( (item->offset-8-pointer >> 2 ) & 0x3FFFFFF );
+			} else
+			if ( record>>24 == 3 ) {
+				*pointer = 0xEB<<24 |
+							( (item->offset-8-pointer >> 2 ) & 0x3FFFFFF );
+			} else
+			if ( record>>24 == 1 )
+			{
+				offs=item->offset - pointer - 4;
+				if (offs <= 0) *pointer=offs;
+				else
+				{
+					*pointer= -offs; *(pointer-1)=*(pointer-1) & ~ 0x800000;
+				}
+			} else
+			if ( record>>24 == 2 )
+			{
+				offs=item->offset - pointer - 4;
+				if (offs <= 0) *pointer=offs;
+				else
+				{
+					*pointer= -offs; *(pointer-1)=*(pointer-1) ^ 0xC00000;
+				}
+			}
+			pointer-= (0xFFFFFF & record)>>2;
+		} while (record & 0xFFFFFF);
+	}
+	if (item->right) resolve(item->right);
+}
+
+/* Main function. This was spilt up from a HUGE function. */
+
+static int main() {
+
+	sys("OS_Write0","Small C Linker v1.0\n");
+
+	if ( (codesize=getfiles())==0 ) return 0;
+		/* Exit if error during file reading */
+
+	printf("Proposed executable size: %d (%x)\n",codesize+4,codesize+4);
+
+	code=malloc(codesize+=4)+4; /* code[codesize] is where the linked code *
+								 * is built. (+4 for initial branch)       */
+
+	idents=newnode("TableEnd");
+
+	/* Load each file in turn and link up the chains */
+
+	{
+		int codeptr,index;
+		for (	index=0, codeptr=code;
+				index<=linkfiles;
+				codeptr+=offsets[index++]
+			)
+			linkfile(index,codeptr);
+	}
+
+/* We should now have all the identifiers, their locations and chain heads. */
+
+	resolve(idents);
+
+	{
+		int *ptr; struct idtr *e;
+		strcopy("aout",dirtail);
+		e=entry("`stackinit");
+		ptr=code-=4;
+		*ptr = (0xEA<<24) | e->offset-8-code>>2;
+		sys("OS_File",(10,dirptr,0xFF8,0,code,code+codesize));
+		printf("File output: %s\n",dirptr);
+	}
+}

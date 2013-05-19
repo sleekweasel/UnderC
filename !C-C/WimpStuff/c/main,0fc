@@ -1,0 +1,129 @@
+/*
+ *  Wimpstuff.  Basic Wimp frontend and load, also main()
+ */
+
+extern void* malloc( int );
+extern void free( void* );
+
+int myhandle=0, mywindow=0, /* Task and window handles */
+                 *blocki=0; /* Integer pointer to block. Yay fun!
+                                Lovely handling w/ int*. */
+
+int icswit[]={200, 230, 260, 290}; /* Index of 'n' or 'f' in sopt{on|of} */
+
+char *block=0,              /* Whyblock. Also ref'd with blocki */
+     *menublk=0,            /* Menu area also init used for templates */
+     *icontext=0,           /* Icon text for templates (icswit indexes) */
+     *sprites=0;            /* Window sprite area */
+
+void load_window() {
+  int itextsz;
+
+  sprites=malloc(2500); /* Actually only need 2100, bwth */
+  { int *i; i=sprites; i[0]=2500; i[2]=16; }
+  sys("OS_SpriteOp",(0x109,sprites));
+  sys("OS_SpriteOp",(0x10A,sprites,"<CtoC$Dir>.SpriteFile"));
+
+  sys("Wimp_OpenTemplate",(,"<CtoC$Dir>.Templates"));
+
+  icontext=malloc(itextsz=800); menublk=malloc(400);
+  sys("Wimp_LoadTemplate",(,menublk+4,icontext,icontext+itextsz,-1,
+                            "main\0       ",0));
+                          /* Spaces padding *necessary*! */
+  menublk[32+4]=255; /* No frame */
+  { int *i; i=menublk+4; i[16]=sprites; /* Spritearea for window, except... */
+                      i[22+ 17 *8+6]=1; /* icon 17 is wimparea */
+                            i[6]=-1; }  /* Open on top of windowpile */
+
+  sys("Wimp_CreateWindow",(,menublk+4),mywindow);
+
+  { int *i; i=menublk; *i=mywindow; }
+  sys("Wimp_OpenWindow",(,menublk));
+
+  sys("Wimp_CloseTemplate");
+}
+
+int mouse_buttons() {
+  if ( blocki[4]==1 ) { /* Title */
+    blocki[1]=mywindow;
+    sys("Wimp_GetWindowState",(,blocki+1));
+    blocki[0]=mywindow; blocki[1]=1;
+    sys("Wimp_DragBox",(,blocki));
+  }
+  if ( blocki[4]==2 ) { /* Close */
+    blocki[0]=mywindow;
+    sys("Wimp_CloseWindow",(,block));
+    return 1;
+  }
+  if ( blocki[4]==3 ) { /* Fore/aft */
+    blocki[0]=mywindow;
+    sys("Wimp_GetWindowState",(,blocki));
+    if ( blocki[8] & 1<<17 ) blocki[7]=-2; /* Uncovered->ToBack */
+                        else blocki[7]=-1; /* (Part)Covered->Foremost */
+    sys("Wimp_OpenWindow",(,block));
+  }
+  if ( 12<=blocki[4] && blocki[4]<=15 ) { /* Pushbuttons. Also need array of
+                                           *  addresses to (un)set True/False */
+    int ico; ico=icswit[blocki[4]-12];
+    if ( icontext[ico]=='f' ) icontext[ico]='n'; /* ='n' => 'on' == True */
+                         else icontext[ico]='f';
+    blocki[0]=mywindow; blocki[1]=blocki[4]; blocki[2]=0; blocki[3]=1<<21;
+    sys("Wimp_SetIconState",(,block));
+  }
+  return 0;
+}
+
+int show_menu(){} /* Watch this space */
+
+int wich=0; /* Static for poll_null */
+
+int wimp_poll(int mainpoll) { 
+  int quit, why; quit=0;
+  if (block==0) block=blocki=malloc(256);
+
+  sys("Wimp_Poll",(0,block),(why));
+  if ( why==0 ) {
+    char *to; int left;
+    sys("Wimp_GetPointerInfo",(,block)); 
+    if ( wich!=blocki[3]+blocki[4] ) {
+      wich=blocki[3]+blocki[4];
+      sys("OS_ConvertInteger1",(blocki[4],icontext+4,14),(,to,left));
+      blocki[0]=mywindow; blocki[1]=blocki[4];       /* ‹‹ Iconnumber */
+      sys("Wimp_GetIconState",(,block));
+      *to++='t';                                     /* ŠŠ Text address */
+      sys("OS_ConvertInteger2",(blocki[7]-icontext,to,left),(,to,left));
+      *to++='+';                                     /* ŠŠ validation string */
+      sys("OS_ConvertInteger1",(blocki[8]-blocki[7],to,left));
+      blocki[0]=mywindow; blocki[1]=1; blocki[2]=0; blocki[3]=0;
+      sys("Wimp_SetIconState",(,block));  /* Update Icon */
+    }
+  }
+  if ( why==1 ) {
+    int more;
+    sys("Wimp_RedrawWindow",(,block),more);
+    while ( more ) {
+##    sys("Wimp_BorderWindow",(,block));
+      /* Something more here one day, hopefully. */
+      sys("Wimp_GetRectangle",(,block),more);
+    }
+  }
+  if ( why==2 ) sys("Wimp_OpenWindow",(,block));
+  if ( why==3 ) { sys("Wimp_CloseWindow",(,block)); quit=1; }
+  if ( why==6 ) {
+    if ( blocki[2] & 2 ) show_menu();
+                    else quit=mouse_buttons();
+  }
+
+  return (!quit);
+}
+
+extern int main() {
+
+  sys("Wimp_Initialise",(200,'TASK',"Over C"),(,myhandle));
+
+  load_window();
+  while ( wimp_poll(1) ); /* (1) => Not compiling currently */
+
+  sys("Wimp_CloseDown",(myhandle,'TASK'));
+
+}

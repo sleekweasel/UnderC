@@ -1,0 +1,746 @@
+/* prepr.c -- Interface between file and C tokeniser (Line based)  P229
+ *
+ * Processes: 1. Trigraph substitution  ( On trigraph_flag )
+ *            2. Splice lines ending with \
+ *            3i.Lines spilt into tokens (seperated by whitespace..not)
+ *               Comments replaced by single space ( With nestedcomments_flag )
+ *            ii.Preprocessing directives & Macro replacement (macro.c)
+ * Tokenise:
+ *            4i.Escape sequences in char constants and string literals replaced
+ *            ii.Adjacent string literals concatenated
+ *
+ * 1, 2 & 3i giveline(): Read in a line taking \ into account, kill comments.
+ *
+ * Resulting line is given to 3ii, nextline() which checks for an initial #.
+ *  #define, #if((n)def), #undef, #pragma are simply processed.
+ *  All other types are macro-replaced, further #directives are executed, but
+ *  a non-#directive line is returned to the caller, 4.
+ *
+ * 4, tokens.c, takes lines from nextline(). These simply require tokenising.
+ */
+
+#include "malloc.h"
+#include "error.h"
+#include "tree.h"
+#include "strings.h"
+#include "macro.h"
+#include "if.h"
+
+typedef struct incnode INCnode;
+
+struct incnode {
+               INCnode *lastactive;
+                  char *incname, *filename;
+                   int  ptr, linenumber;
+               };
+
+static INCnode *inclist=0; /* Include stack of outstanding files   */
+
+extern int  trigraph_flag=1,
+            strongEOF_flag=1,
+            nestedcomments_flag=1,
+
+            macrodef_flag=0,
+            include_flag=0,
+
+            incdepth=0,  /* Depth of current #inclusion nesting */
+
+            channel=0,   /* Currently open file channel if >0 */
+
+            fline=0;     /* Currently open file line, possibly from #line */
+
+static int  cptr=0;      /* Currently open file pointer       */
+
+extern char *fname=0,    /* Currently open file name, possibly from #line */
+            *basedir=0;  /* Directory of first inclusion */
+
+static char *cname=0;    /* Currently open file name, absolute filename   */
+
+
+/*---------------------------------------------------------------------------*/
+
+/* giveline() is extern for macro.c to extend lines during  *
+ *   parameter collection.                                  */
+
+extern char *giveline( void ) {
+  /* Return next line after trigraphs and line \ splicing */
+  /* If last char is 10 (excl term), we have not reached end of file */
+
+  char *first, *loadfirst, *last;
+  int comments,  quotes,  apostr,  /* Flag for 'inside one of these' */
+      esc_sl,                      /* Escape-slash \n etc */
+      jsplice,                     /* Don't do trigraphs which straddle \ */
+      stay;                        /* Condition flag until break implemented. */
+      comments=0; quotes=0; apostr=0; jsplice=0; esc_sl=0;
+
+  loadfirst = first = malloc(120+4);   /* 120 is loadlen, 'cos just over 80ch */
+  *loadfirst++=' '; *loadfirst++=' ';  /* +4 for these spaces and a x\0 @ end */
+  fline++;                             /* Loading next line. */
+
+  do {
+    int eof;
+    if ( channel>0 ) sys("OS_GBPB",(3,channel,loadfirst,120,cptr),
+                                   (,,last,eof)); /* One after last file char */
+    else eof=120;
+
+ /*  eof only 120 if there were no characters to read. */
+
+    if ( eof==120 ) {
+      if ( comments ) error(Alert,"End-of-file used to terminate comment.");
+      if ( quotes ) { error(Alert,"End-of-file used to terminate quotes.");
+                      *last++='"'; }
+      if ( apostr ) { error(Alert,"End-of-file used to terminate apostrophes.");
+                      *last++='\''; }
+      if ( loadfirst==first+2 ) last=first;
+      *last=0; return first;  /* EOF, \0 says 'can't read more lines' */
+    }
+
+    if ( eof ) *last++=10; /* Ensure an eol char */
+
+    { char *copy, *from;
+      from=copy=loadfirst;
+      while ( from < last && *(copy-1)!=13 && *(copy-1)!=10 ) {
+
+       /* Trigraphs... May as well do this junk. */
+
+        if ( jsplice ) jsplice--;
+        if ( *(copy-2)=='?' && trigraph_flag && !jsplice && *(copy-1)=='?' ) {
+          int i;
+          for ( i=0 ; i<8; i++ )
+            if ( *from == "=/'()|<>-"[i] ) *from="#\\^[]|{}~"[i], i=10;
+          if ( i == 11 ) copy-=2;
+        }
+
+       /* Give warning about funny control chars */
+
+        if ( *from<' ' && *from!=10 && *from!=13 ) {
+          if ( *from!=9 )
+            error(Alert,"Unexpected character <%i> read as space.",*from);
+          *from=' ';
+        }
+
+       /* Quotes, comments and apostrophes all mutually exclusive */
+
+        if ( *from=='"'  && !comments && !apostr && !esc_sl ) quotes^=1;
+        if ( *from=='\'' && !comments && !quotes && !esc_sl ) apostr^=1;
+
+        if ( *(copy-1)=='/' && *from=='*' && !quotes && !apostr ) {
+          if ( comments && !nestedcomments_flag )
+             error(Warn,"Found /* inside comments (with comment nesting off).");
+          comments++; *copy--=*from=27;
+        }
+        else ;
+
+
+       /* Open comments become <27> markers */
+
+        if ( *from=='`' && !comments && !quotes && !apostr )
+           error(Ansi,"Found a ` (anti-macro) character.");
+
+       /* Splice lines (and inc linecount), but... */
+
+        if ( *(copy-1)=='\\' && ( *from==13 || *from==10 ) ) {
+          copy--; from++; fline++; jsplice=3; esc_sl=0;
+          if ( *(copy-1)=='\\' && ( quotes || apostr ) ) {
+            char *p; for ( p=copy-1; *p=='\\'; p--) esc_sl^=1;
+          }         /* This test is okay because of the initial spaces. */
+        }
+       /* ...don't close comments until *copy and *from are valid */
+
+   else if ( *(copy-1)=='*' && *from=='/' && !quotes && !apostr )
+          if ( comments ) {
+            *--copy=0;
+            do {
+              while ( *copy!=27 ) copy--;
+              comments--;
+              *copy=0;
+            } while ( comments && !nestedcomments_flag );
+            *from=' ';
+          } else {
+            error(Warn,"Found */ without a matching /*.");
+            *copy++=*from++;
+          }
+       /*  ...copy characters to copy. */
+   else {
+          if ( !comments || (*from!=13 && *from!=10)   )
+            *copy++ = *from++;
+          else {
+            fline++; from++;         /* Inc linecount inside comment */
+          }
+          esc_sl=0;
+          if ( *(copy-1)=='\\' && ( quotes || apostr ) ) {
+            char *p; for ( p=copy-1; *p--=='\\';) esc_sl^=1;
+          }         /* This test is okay because of the initial spaces. */
+        }
+      }
+
+     /* Set up processed data details. */
+
+      last=copy; cptr+=from-loadfirst;
+    }
+
+    /* We need more space..? */
+
+    if ( stay = ( ( *(last-1)!=13 && *(last-1)!=10 ) || comments ) ) {
+      char *nufirst; int len;
+      len = last-first;
+      nufirst=realloc(first, len+120+2); /* +1 for a terminator +1 for error */
+      if ( nufirst == 0 ) nufirst=first;  /* realloc()==0 handled nowhere */
+      loadfirst=nufirst+len; first=nufirst;
+    }
+
+  } while ( stay )
+
+  *last--=0;
+
+  {
+    char dhash, *p;
+    p=first; while ( *p==' ' ) p++;
+    dhash=((p[0]=='#')&&(p[1]=='#'));
+    if ( quotes && !dhash )
+    {
+      *last++='"';
+      error(Alert,"String-literals can't span line-ends.");
+    }
+
+    if ( apostr & !dhash )
+    {
+      *last++='\'';
+      error(Alert,"Char-constants can't span line-ends.");
+    }
+  }
+
+  *last++=10; *last=0; /* This is the normal end-of-line line inc  */
+
+  return first;
+
+   /* Includes two prepended spaces, but those shouldn't make any difference.
+    * (Not prepended to escape-joined lines, only to the start of the virtual
+    * line.)
+    * <10> at the end allows appending if this line is too short.
+    */
+}
+
+/*-------------------------------------------------------------------------*/
+
+static int idmatch(char *lptr, char *cmp) {
+  while ( *cmp && *cmp==*lptr ) cmp++, lptr++;
+  return *cmp==0;
+}
+
+/* skiphead() and steptoken() are extern for macro.c */
+
+extern char *skiphead(char *cs) {
+  if (*cs && *cs<=' ') while (*++cs && *cs<=' ');
+  return cs;
+}
+
+extern char *steptoken(char *lptr) {
+  char te;
+  te=*lptr++;
+
+ /* Match quotes */
+
+  if ( te=='"' || te=='\'' ) { /* These *always* match, by now */
+    while ( *lptr!=te )
+      if ( *lptr++ == '\\' ) lptr++; /* Skip any escapes */
+    return lptr+1;
+  }
+
+ /* This is the ANSI definition of 'preprocessor number'. */
+
+  if ( isdigit(te) || ( te=='.' && isdigit(*lptr) ) ) {
+    te=*lptr;
+    while ( isdigit(te) || ( isalpha(te) && te!='_' ) || te=='.' )
+      if ( ( te=='e' || te=='E' ) &&
+           ( *(lptr+1)=='+' || *(lptr+1)=='-' ) ) te=*(lptr+=2);
+                                             else te=*++lptr;
+    return lptr;
+  }
+
+ /* Allow ` in identifiers as anti-macro. Stripped out later with \n repl. */
+
+  if ( isalpha(te) ) {
+    te=*lptr;
+    while ( isalpha(te) || te=='`' || isdigit(te) ) te=*++lptr;
+    return lptr;
+  }
+
+ /* Determine length of symbol-token */
+
+  if ( te==*lptr && strchr("+-=<>|&.#",te) ) {
+    if ( te=='.' ) if ( *(lptr+1)=='.' ) return lptr+2; else return lptr;
+    if ( *(lptr+1)=='=' && ( te=='<' || te=='>' ) ) return lptr+2;
+    return lptr+1;
+  }
+  if ( *lptr=='=' && strchr("+-|&<>%*/!^",te) ) return lptr+1;
+  if ( te=='-' && *lptr=='>' ) return lptr+1;
+
+  return lptr;
+}
+
+/*----------------------------------------------------------------------------*/
+
+/*  Macro structure: name  - name of macro
+ *                   value - replacement text. \01<n> param    n=1,2,3..
+ *                                             \02<n> # param
+ *                                             \03    ## directive
+ *                   type  - <param-count><param1><0><param2><0>...<0><0>
+ *                           but type==0 -> no params
+ *
+ *  macroexpand() has been excluded to macro.c for space concerns.
+ */
+
+static void do_define (char *line, char *lptr) {
+                                    /* #define name(params) replace */
+  MACnode *macro;
+
+  { char *id_start; id_start=skiphead(lptr);
+
+    if ( ! isalpha(*id_start) ) {
+      error(Error,"Macro name missing from #define. Ignoring directive.");
+      free(line); return;
+    }
+
+    lptr=steptoken(id_start);
+
+    if ( memchr(id_start, '`', lptr-id_start) ) {
+       error(Error,"Found ` in macro name. Ignoring directive.");
+       free(line); return;
+    }
+
+    { char tmp;
+      tmp=*lptr; *lptr=0;               /* ->value == 0 new/invalid macro */
+      macro=seekadd(id_start,macrotree,sizeof(MACnode),MACNODE);
+      *lptr=tmp;
+    }
+  }
+
+  if ( ( (*lptr=='(') ^ (macro->params!=0) ) && (macro->body!=0) ) {
+    error(Error,"Prior macro has %s parameter list. Ignoring definition.",
+                             macro->params?"a":"no");
+    free(line); return;                      
+  }
+
+  if ( *lptr++ != '(' ) {
+    macro->params=0; lptr--; /* No parameters */
+  } else {
+    char *params, /* Make param list for insertion or comparison. */
+         *lpt2;
+    int ct, len, parix;
+    params = malloc(1); /* Arbitrary '1'. *param=ct */
+    parix=1; len=1; ct=0;
+    lptr=skiphead(lptr);
+    do {
+      lpt2=lptr;
+      lptr=steptoken(lpt2);  /* Cut identifier from list */
+
+      if ( ! isalpha(*lpt2) ) {
+        *lptr=0;
+        error(Error,"Misplaced identifier. Ignoring definition.");
+        free(line); free(params); return;
+      }
+
+      len+=lptr-lpt2+1; params=realloc(params,len);
+      memcpy(params+parix, lpt2, lptr-lpt2);
+      *(params+len-1)=0; /* param terminator */
+
+      parix=len;
+
+      lptr=skiphead(lptr); /* to comma/bracket(?) */
+
+      if (*lptr!=',' && *lptr!=')' && *lptr>=' ') {
+        if (isalpha(*lptr)) error(Alert,"Pretending I found an absent comma.");
+      } else
+        if (*lptr==',') if ( (lptr=skiphead(lptr+1), *lptr)==')' )
+            error(Alert,"Ignoring extra comma at end of list.");
+      ct++;
+
+    } while ( isalpha(*lptr) )
+
+    /* Should have a ')' to get out of this, but... */
+
+    if ( *lptr++ != ')' ) {
+      error(Error,"Missing close bracket. Ignoring definition.");
+      free(params); free(line); return;
+    }
+
+    /* Add terminating \0 */
+
+    params=realloc(params, ++parix);
+    params[parix-1]=0; params[0]=ct;
+
+    if ( macro->params ) {
+      if ( memcmp(params, macro->params, parix) ) {
+        error(Error,"Parameter list contradicts existing macro. Ignoring new definition.");
+        free(params); free(line); return;
+      }
+      free(params);
+    } else macro->params=params;
+  }
+
+  /*  Now just have to copy/compare the definition to macro->value,
+   *   fixing the codes for \1 ids, \2 #ids and \3 ## directives,
+   *   and messing about with spaces.
+   */
+
+  { char *value, *lpt2; int len, vaix, splice;
+    value=malloc(2); *value=' ';
+    vaix=1; len=2; lpt2=lptr; splice=-1;
+
+    while ( ( lptr=skiphead(lptr) , *lptr ) ) {
+
+      lpt2=steptoken(lptr);
+
+      if ( *lptr=='#' && *(lptr+1)=='#' ) {
+        if ( splice==-1 ) error(Error,"Cannot start a macro with ##");
+        len+=2; value=realloc(value,len);
+        value[vaix++]=3; value[vaix++]=' ';
+        lptr=lpt2;
+        splice=1;
+      } else {
+        if ( (*lptr=='#' || isalpha(*lptr)) && macro->params ) {
+          char *chk; int quo, found, ct;
+          chk=macro->params; chk++;
+          quo=(*lptr=='#'); found=0; ct=1;
+
+          if ( quo ) lptr=skiphead(lptr+1), lpt2=steptoken(lptr);
+
+          while ( ! found && *chk ) {
+            char *frm;
+            for ( frm=lptr; *chk && frm<lpt2 && *chk==*frm; chk++, frm++ );
+            if ( ! *chk && frm==lpt2 ) found=ct;
+            chk+=strlen(chk)+1; ct++;
+          }
+
+          if ( found ) {
+            len+=3; value=realloc(value,len);
+            value[vaix++]=quo+1; value[vaix++]=found; value[vaix++]=' ';
+            lptr=lpt2;
+          } else
+            if ( quo ) error(Error,"Attempt to quote a non-parameter failed.");
+        }
+        splice=0;
+      }
+
+      if ( lptr!=lpt2 ) {
+        len+=lpt2-lptr+1; value=realloc(value,len);
+        while ( lptr!=lpt2 ) value[vaix++]=*lptr++;
+        value[vaix++]=' ';
+      }
+    }
+    value[vaix]=0;
+
+    if ( splice==-1 ) error(Warn,"Macro definition is empty");
+    if ( splice==1 ) error(Error,"Cannot end macro with ##");
+
+    if ( macro->body ) {
+      if ( memcmp( macro->body, value, len ) ) {
+        error(Error,"Macro value contradicts prior value.");
+        free(value); free(line); return;
+      }
+      free(value);
+    } else
+      macro->body=value;
+  }
+
+  if ( macrodef_flag )
+    error(Doing,"Defined '%s' as:%$", macro->base.name, macro->body);
+
+  free(line); return;
+}
+
+static void do_undef  (char *line, char *lptr) {
+  MACnode *macro;
+  char *lpt2; lpt2=skiphead(lptr);
+
+  if ( ! isalpha(*lpt2) ) {
+    error(Error,"Macro name missing from #undef. Ignoring directive.");
+    free(line); return;
+  }
+
+  lptr=steptoken(lpt2);
+
+  if ( memchr(lpt2, '`', lptr-lpt2) ) {
+     error(Error,"Found ` in macro name. Ignoring directive.");
+     free(line); return;
+  }
+
+  *lptr=0;
+  macro=seekfind(lpt2,macrotree); /* ->value == 0 new/invalid macro */
+
+  if ( macro==0 ) error(Warn,"Macro '%s' was not defined anyway.",lpt2);
+  else {
+    if ( macro->params ) { free(macro->params); macro->params=0; }
+    if ( macro->body   ) { free(macro->body  ); macro->body  =0; }
+    if ( macrodef_flag )
+      error(Doing,"Undefined '%s'",macro->base.name);
+  }
+  free(line);
+}
+
+/*----------------------------------------------------------------------------*/
+
+static int first_include_ext;
+static int first_include_ptr;
+static int pct;
+
+static void destruct_files() { /* Clear up on abort */
+}
+
+static void do_EOF( void ) {  /* Open last file as if it was never closed */
+
+  if ( channel != 0 ) sys("OS_Find",(0,channel));
+
+  channel=0;
+
+  if ( inclist == 0 ) {
+  	if ( pct ) { sys("Hourglass_Off"); pct=0; }
+  	return; /* giveline returns empty lines if no channel. */
+  }
+
+  if ( include_flag ) error(Doing,"Opening old file '%s'(%i)",
+                                              inclist->filename,incdepth-1);
+
+  sys("OS_Find",(0x40,inclist->filename),channel);
+
+  if ( !channel )
+    error(Abort,"Can't reopen '%s' after #include.", inclist->incname);
+
+  { INCnode *tmp; tmp=inclist;
+    free(cname); free(fname);
+    cname   = tmp->filename ; /* absolute filename */
+    fname   = tmp->incname  ;
+    cptr    = tmp->ptr ;
+    fline   = tmp->linenumber ;
+    inclist = tmp->lastactive ; 
+    free(tmp); incdepth--;
+  }
+
+  if ( !channel )  do_EOF();
+
+  if ( iflist && iflist->incdepth<incdepth )
+     error(Warn,"#If started in '%s' continues past eof",
+                                 iflist->incname);
+}
+
+/* #include "tokens.h" */
+extern int seetoken();
+
+extern char *sys_include="MC:";
+
+extern
+void do_include(char *line, char *lptr) {
+   /*
+    *   Include is extern so that it can be used to start the first file
+    *    with char *fn=strdup("\"Filename\""); do_include(fn,fn);
+    *    note that basedir should be set up too.
+    */
+
+  int initial;
+
+  if ( macrotree == 0 ) { /* This is the preprocessor initialisation. */
+    macrotree=makeheader(sizeof(MACnode),MACNODE);
+    initial=1;
+  }
+  else
+    initial=0;
+
+  lptr=skiphead(lptr);  memset(line, ' ', lptr-line);
+
+  if ( *lptr!='"' && *lptr!='<' ) line=macroexpand(line);
+
+  lptr=skiphead(line);
+
+  if ( *lptr!='"' && *lptr!='<' )
+    error(Error,"Ignored #include not starting with \" or <.");
+  else {
+    char te, *end, *fdir;
+
+    if ( channel>0 ) {        /* This is 'save details for restore later' */
+      INCnode *newnode;
+      newnode=malloc( sizeof(INCnode) );
+      newnode->filename  =cname ; cname=0;	/* Current real filename */
+      newnode->ptr       =cptr  ;			/* Current real filepointer */
+      newnode->linenumber=fline ;			/* Official real fileline (#line) */
+      newnode->incname   =strdup(fname);	/* Official real filename (#line) */
+      newnode->lastactive=inclist ;			/* Link */
+      inclist=newnode; incdepth++;
+      sys("OS_Find",(0,channel)); channel=0; /* Close channel */
+    } else {
+      free(fname); free(cname);				/* No channel open, must be.. */
+      fname=0; cname=0; incdepth=0;			/* ..an initial call */
+    }
+
+    te = (*lptr++=='"') ? '"' : '>';
+
+    { char *copy;
+      for ( copy=end=lptr;
+            *copy>=' ' && *copy!=te;
+            (*copy==' ') ? (copy++) : (*end++=*copy++) );
+
+      if ( *copy!=te ) error(Alert,"#include filename improperly terminated.");
+      *end=0;
+    }
+
+    /* Move foo.x to x.foo */
+
+    if ( lptr+2<end && end[-2]=='.' ) {
+      char extn, *from, *to; extn=end[-1];
+      to=end-1; from=end-3;
+      while ( from>=lptr && *from!='.' && *from!=':' ) *to--=*from--;
+      *to--='.'; *to=extn;
+    }
+
+    if ( te=='"' ) sys("OS_Find",(0x40,lptr,fdir=""),channel);
+    if ( !channel && !strpbrk(lptr,"$:%}&^\\") ) {
+      if ( te=='"' )  sys("OS_Find",(0x42,lptr,fdir=basedir),channel);
+      if ( !channel ) {
+
+    /*  sys("OS_Find",(0x41,lptr,fdir="MC:"),channel); */
+
+        char *fnm;
+        fnm=malloc(strlen(lptr)+strlen(sys_include)+1);
+        strcpy(fnm,fdir=sys_include);
+        strcat(fnm,lptr);
+        sys("OS_Find",(0x40,fnm),channel);
+        free(fnm);
+      }
+    }
+
+    if ( !channel ) {
+      error(Error,"#include file '%s%s%s' not found.",
+                             fdir,(*fdir && *fdir!='<')?".":"",lptr);
+      free(line);
+      do_EOF();
+      return;
+    }
+
+	if ( !incdepth ) {
+		sys("OS_Args",(2,channel),(,,first_include_ext));
+		sys("Hourglass_On");
+		pct=0;
+	}
+
+    { int len;
+      cname=malloc( strlen(lptr) + (len=strlen(fdir)) +1 );
+      if ( len ) {
+        strcpy(cname,fdir);
+        if ( fdir[len-1]!=':' && fdir[len-1]!='.' ) *(cname+len++)='.';
+      }
+      strcpy(cname+len,lptr);
+    }
+    fline=cptr=0; free(fname); fname=strdup(lptr);
+  }
+
+  if ( include_flag ) error(Doing,"Have included '%s' as '%s'",fname,cname);
+
+  free(line);
+  if (initial) seetoken();
+}
+
+static void do_line   (char *line, char *lptr) {
+  memset(line, ' ', lptr-line);
+  line=macroexpand(line);
+  lptr=skiphead(line);
+  for ( fline=0; isdigit(*lptr); fline=10*fline+*lptr++-'0');
+  if ( --fline<0 ) {
+    fline=0;
+    error(Error,"Nominated #line number is out of range.");
+  }
+  lptr=skiphead(lptr);
+  if ( *lptr=='"' ) {
+    free(fname);
+    for ( fname=++lptr; *fname>' ' && *fname!='"'; fname++);
+    if ( *fname!='"' ) error(Alert,"#line's filename did not end in \".");
+    *fname=0;
+    fname=strdup(lptr);
+  }
+  free(line);
+}
+
+static void do_error  (char *line, char *lptr) {
+  error(Error,"#Error report: %s",lptr);
+  free(line);
+}
+
+
+/*---------------------------------------------------------------------------*/
+extern void do_pragma (char *line, char *lptr);
+/*  Removed to pragma.c for speedy update reasons  */
+/*---------------------------------------------------------------------------*/
+/* Removed to if.c for size (BASIC compilation) reasons */
+/*---------------------------------------------------------------------------*/
+
+static void macrofree( MACnode *node ) {
+	free(node->base.name);
+	free(node->body);
+	free(node->params);
+	free(node);
+}
+
+extern void destruct_preproc() { /* Clear up after abort */
+  iterate(macrotree,&macrofree); /* Kill off macros. from tree.c */
+  destruct_files();
+  destruct_ifs();
+/* destruct_tokenise(); */
+}
+
+static char *int_nextline() { /* Decode # lines, return free()-able line. */
+  char *line, *lptr; line=0;
+
+  do {
+    if ( line!=0 ) free(line);
+    line=giveline();
+    if ( *line==0 ) do_EOF();
+  } while ( *line==0 && channel && !strongEOF_flag );
+
+  lptr=skiphead(line);
+
+  if ( *lptr==0 ) return line;  /* StrongEOF fiddle */
+
+  if ( *lptr=='#' ) { /* Requires #directive juggling */
+
+    lptr=skiphead(lptr+1); /* Skip whitespace */
+
+    if ( *lptr<' ' ) free(line); else
+    if ( *lptr=='#' ) free(line); else
+    if ( idmatch(lptr,"ifdef")   )  do_ifdef  (line,skiphead(lptr+5)); else
+    if ( idmatch(lptr,"ifndef")  )  do_ifndef (line,skiphead(lptr+6)); else
+    if ( idmatch(lptr,"if")      )  do_if     (line,skiphead(lptr+2)); else
+    if ( idmatch(lptr,"endif")   )  do_endif  (line,skiphead(lptr+5)); else
+    if ( idmatch(lptr,"elif")    )  do_elif   (line,skiphead(lptr+4)); else
+    if ( idmatch(lptr,"else")    )  do_else   (line,skiphead(lptr+4)); else
+    if ( ! ( iflist && iflist->seek!=if_pass ) ) {
+             /* Only process these if the line isn't eaten by #if */
+      if ( idmatch(lptr,"define")  )  do_define (line,skiphead(lptr+6)); else
+      if ( idmatch(lptr,"undef")   )  do_undef  (line,skiphead(lptr+5)); else
+      if ( idmatch(lptr,"include") )  do_include(line,skiphead(lptr+7)); else
+      if ( idmatch(lptr,"line")    )  do_line   (line,skiphead(lptr+4)); else
+      if ( idmatch(lptr,"error")   )  do_error  (line,skiphead(lptr+5)); else
+      if ( idmatch(lptr,"pragma")  )  do_pragma (line,skiphead(lptr+6)); else
+        { error(Error,"Unrecognised # directive ignored."); free(line); }
+    } else free(line);
+    line=strdup(" ");
+  } else
+    if ( ! ( iflist && iflist->seek!=if_pass ) ) line=macroexpand(line);
+             /* Only bother to macroexpand if the line's going to escape. */
+  return line;
+}
+
+extern char *nextline(){ /*  Return lines with the consent of #if..#endif */
+  char *line; line=0;
+  do {
+    free(line);
+    line=int_nextline();
+  } while ( iflist && iflist->seek!=if_pass && *line );
+
+	if ( !incdepth ) {
+		int pc; pc=pct;
+		sys("OS_Args",(0,channel),(,,first_include_ptr));
+		while ( (pct*first_include_ext) <= (100*first_include_ptr) ) pct++;
+		sys("Hourglass_Percentage",(pct));
+	}
+
+  return line;
+}

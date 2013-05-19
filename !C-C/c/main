@@ -1,0 +1,228 @@
+
+#include "malloc.h"
+#include "strings.h"
+#include "error.h"
+#include "prepr.h"
+#include "tokens.h"
+#include "tree.h"
+#include "expr.h"
+#include "types.h"
+#include "parse.h"
+#include "struct.h"
+
+extern int dumptrace_flag=0;
+
+##------------------------------------------------------------------------
+## showdump.. Not for long, though. Archiving imminent. :)
+
+static int showdump(int *fal)
+{
+	char *ptr, *heap, *base; int *ofal; ofal=fal-1;
+	if ( ! dumptrace_flag ) return;
+	while (fal && *fal!='Heap') fal--; /* This should find the heap. */
+	ptr=heap=fal; base=heap+(fal[2]);
+	printf("Heap at %x, Free at %x\n",fal,ptr+(fal[1])+4);
+	ptr+=fal[1]+4; fal=ptr;
+	{
+		int *i; char *c;
+		c=ofal; i=c;				/* c=i=start of malloc()ed block */
+		while ( c<base && c<ptr )
+		{
+			int len; len=*i;
+			printf("-----Malloc(%i  0x%X)\n",len-4,len-4);
+			while ( len>0 )
+			{
+				printf("%x : %C%C%C%C : %x\n",c,c[0],c[1],c[2],c[3],*i);
+				c+=4; i++; len-=4;
+			}
+		}
+	}
+	do
+	{
+		fal=ptr;
+		printf("Free block at %x for %x\n",fal,*(fal+1));
+		ptr+=*fal;					/* Start of next free */
+		if (*fal==0) ptr=base;
+		{
+			int *i; char *c;
+			c=fal; i=c+=fal[1];		/* c=i=start of malloc()ed block */
+			while ( c<ptr )
+			{
+				int len; len=*i;
+				printf("-----Malloc(%i  0x%X)\n",len-4,len-4);
+				while ( len>0 )
+				{
+					printf("%x : %C%C%C%C : %x\n",c,c[0],c[1],c[2],c[3],*i);
+					c+=4; i++; len-=4;
+				}
+			}
+		}
+	} while (*fal!=0);
+}
+
+##------------------------------------------------------------------------
+## Type and struct printing.
+
+void print_id( IDnode *id )
+{
+	if ( id->ty.is==(Enum | Const_Q) )
+		printf("%t %y '%s'==%d\n",
+			id->ty.is,id->ty.type,id->id.name,id->ty.value);
+	else
+	if ( id->ty.is )
+		printf("%t %y '%s'\n",id->ty.is,id->ty.type,id->id.name);
+}
+
+void print_st( IDnode *id )
+{
+	if ( id->ty.is )
+	{
+		if ( id->id.name )
+			printf("%t {%L}:%d '%s'\n",
+				id->ty.is,id->ty.type,id->size,id->id.name);
+		else
+			printf("%t {%L}:%d '0x%x'\n",
+				id->ty.is,id->ty.type,id->size,id);
+	}
+}
+
+##------------------------------------------------------------------------
+## Main thing.. about to move this to parse.c
+
+char valid[]={
+	Void,Int,Char,Long,Short,
+	Const,Volatile,Signed,Unsigned,
+	Float,Double,Ident,Struct,Union,Enum,
+	Extern,Auto,Register,Static,Typedef,
+	0};
+
+extern int main()
+{
+	char quit, *cname, *oname;
+	int *fal; fal=strdup("FAL");
+	int oline;
+
+	oline=0;
+
+	printf("%c%c",22,0);
+
+error(Doing,"Starting free %i %i bytes",realloc(0,0),malloc(0));
+
+	id_locals=id_globals=makeheader(sizeof(IDnode));
+	st_locals=st_globals=makeheader(sizeof(IDnode));
+
+	id_globals->ty.is=0; id_globals->ty.value=0; id_globals->ty.type=0;
+	id_globals->offset=0; id_globals->size=0;
+
+	st_globals->ty.is=0; st_globals->ty.value=0; st_globals->ty.type=0;
+	st_globals->offset=0; st_globals->size=0;
+
+	cname=strdup("\"adfs:$.textfile\"");
+	do_include(cname,cname);
+while(0);
+	do {
+		int    decl_spec;
+		Tnode *type, *basetype;
+		Token *see;
+		char  *ident;
+##		Enode *expr;
+
+##error(Doing,"Preparse free %i %i bytes",realloc(0,0),malloc(0));
+
+		decl_spec=0xE000; /* E000 Allow global storage only */
+		basetype = decl_specs( &decl_spec ); /* Read in a type */
+
+##error(Doing,"Read basetype %t %y",decl_spec,basetype);
+
+		see=seetoken();
+
+		if ( see->is!=SemiColon )
+		do
+		{
+			ident=0;
+			type=declarator( &ident, basetype );
+
+##error(Doing,"Read declarator %y %s",type,ident);
+
+			if ( decl_spec==0 ) decl_spec=Extern; /* Default for global */
+
+			if ( decl_spec==Typedef )
+			{
+				IDnode *id;
+				id=seekadd(ident,id_globals,sizeof(IDnode));
+				id->ty.type=type; id->ty.is=decl_spec;
+				id->ty.value=0;
+				id->size=0; id->offset=0;
+			}
+			else
+			{
+				IDnode *id;
+				id=seekadd(ident,id_globals,sizeof(IDnode));
+				id->ty.type=type; id->ty.is=decl_spec;
+				id->ty.value=0;
+				id->size=0; id->offset=0;
+			}
+
+##
+##  Probably about time to move this to parse.c, since this code
+##   is about to start inserting identifiers into the tree.
+##
+
+##			expr=parseexpr(0,SemiColon);
+##
+##showdump(fal);
+
+##	printf("Read: %t %y : '%s'\n",decl_spec,type,ident);
+			free(ident); ident=0;
+
+			see=seetoken();
+
+		}
+		while ( see->is!=SemiColon &&
+				eatatoken(Comma,"Expected a comma after declaration") );
+
+## Accept next token is ident, typebase or 
+
+		if ( !eatatoken(SemiColon,"Ah'm a-hungerin' foah uh semi-colon...") )
+		{
+			Token *see; see=seetoken(0);
+			while ( !strchr(&valid,see->is) ) {
+				error(Alert,"Eaten misplaced token '%T'",see);
+				see=taketoken();
+			}
+		}
+
+##		printexpr(expr);
+##		freeexpr(expr);
+##		printf("\n");
+
+showdump(fal);
+
+		{
+			Token *see; see=seetoken();
+			while ( see->is==eof && channel )
+			{
+				error(Doing,"Encountered EOF");
+				see=taketoken();
+			}
+		}
+
+		sys("OS_Mouse",,(,,quit));
+		quit=quit || channel==0 ;
+
+	} while (!quit);
+	if (channel) sys("OS_Find",(0,channel));
+
+	printf("Id-tree:\n");
+		iterate_ordered(id_globals,&print_id);
+	printf("St-tree:\n");
+		iterate_ordered(st_globals,&print_st);
+	printf("<done>\n");
+
+showdump(fal);    
+
+	error(Doing,"Fname was %x",fname);
+	error(Doing,"Final free %i %i bytes",realloc(0,0),malloc(0));
+	printf("\n\nChannel closed.\n");
+}
+

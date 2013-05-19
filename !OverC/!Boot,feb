@@ -1,0 +1,21 @@
+|| !Boot for M-C compiler
+
+Set MC$Path <Obey$Dir>.
+Set SmallC$Dir <Obey$Dir>
+Set Run$Path <Run$Path>,<MC$Path>o.
+
+IconSprites <Obey$Dir>.!Sprites
+
+Set File$Type_0FC CSource
+Set File$Type_0F0 CObject
+Set File$Type_0FA CAssembly
+Set File$Type_C0D CompSource
+
+Set Alias$@RunType_0FC Run <Obey$Dir>.!Run %%0
+Set Alias$@RunType_0F0 Run <Obey$Dir>.Linker %%0
+Set Alias$@RunType_0FA Exec %%0
+Set Alias$@RunType_C0D Run <Obey$Dir>.!Run %%0
+
+RMEnsure Sarah 0.00 RMRun <Obey$Dir>.Sarah
+
+RMFaster Basic

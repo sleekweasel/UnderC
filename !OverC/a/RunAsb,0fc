@@ -1,0 +1,123 @@
+.mallocI      StmFD  R13!,{lr}         ; void* malloc(int)
+              Cmp    R0,#0             ; Return largest block if %0 = 0
+              MovEQ  R0,#1
+              MovNE  R3,R0
+              MovNE  R0,#2             ; Return rq'd block if %0<>0
+              Adr    R1,`heapstart
+              Swi   "XOS_Heap"
+              BVS    `NoMallocSpace
+              Mov    R0,R2
+              LdmFD  R13!,{pc}^
+
+; void* calloc(int) not being done yet.
+
+.reallocI     StmFD  R13!,{lr}         ; void* realloc(void*, unsigned int)
+              Cmp    R1,#0             ; Return free space in heap if int==0
+              MovEQ  R0,#1
+              BEQ    reallset
+              Ldr    R2,[R0,#-4]       ; System block size
+              Sub    R2,R2,#4          ; User size
+              Sub    R3,R1,R2          ; Required size *change*
+              Mov    R2,R0
+              Mov    R0,#4             ; Return rq'd block if int<>0
+.reallset     Adr    R1,`heapstart
+              Swi   "XOS_Heap"
+              BVS    `NoReallocSpace
+              MovNE  R0,R2
+              MovEQ  R0,R3
+              LdmFD  R13!,{pc}^
+
+.freeI        Cmp    R0,#0
+              MovEQ  pc,lr
+              StmFD  R13!,{lr}         ; void free( void* )
+              Mov    R2,R0
+              Mov    R0,#3             ; Free block if %0<>0
+              Adr    R1,`heapstart
+              Swi   "XOS_Heap"
+              BVS    `BadFree
+              LdmFD  R13!,{pc}^
+
+.`stackinit   Swi   "XOS_GetEnv"
+              Sub    R3,R1,#4
+              Adr    R1,`heapstart     ; very last line is .`heapstart
+              Sub    R3,R3,R1
+              Mov    R0,#0
+              Swi   "XOS_Heap"
+              BVS    `NoStackSpace
+              Mov    R3,#8192
+              Mov    R0,#2
+              Swi   "XOS_Heap"         ; R2=new 8k block
+              BVS    `NoStackSpace
+              Cmp    R2,#0
+              BEQ    `NoStackSpace     ; filter null block
+              Add    R13,R2,#8192
+              Add    sl,R2,#256        ; set up R13 & sl
+
+        ; initialise argv & argc if needed
+
+              BL     mainI
+              Swi   "XOS_Exit"         ; finished, return
+
+.`stackoverf  StmFD  R13!,{R0-R3,lr}
+              Adr    R1,`heapstart
+              Mov    R3,#8192
+              Mov    R0,#2
+              Swi   "XOS_Heap"         ; R2=new block
+              BVS    `NoStackSpace
+              Cmp    R2,#0
+              Beq    `NoStackSpace
+              Add    ip,R2,#8192
+              Ldr    R1,[fp,#-4]       ; R1=old lr
+              Adr    R0,`stackback     ; old lr=new lr (caller 'returns'
+              Str    R0,[fp,#-4]       ;  to `stackrecover routine)
+              Str    R1,[ip,#-4]!      ; Stack old lr on new stack
+              Str    sl,[ip,#-4]!      ; Stack old sl on new stack
+              Add    sl,R2,#256        ; Setup new sl
+              LdmFD  R13!,{R0-R3,lr}   ; retrieve saved bits
+              Mov    R13,ip            ; transfer stack
+              Mov    pc,lr
+
+.`stackback   Add    ip,sl,#7936        ; Free sl's block and 'return' to
+              Ldr    lr,[ip,#-4]!       ;  'caller' s caller.
+              StmFD  R13!,{R0-R3,lr}
+              Sub    R2,sl,#256         ; R2=base of block
+              Ldr    sl,[ip,#-4]        ; sl=old sl
+              Mov    R0,#3
+              Adr    R1,`heapstart
+              Swi   "XOS_Heap"          ; Free this block.
+              BVS    `NoStackSpace
+              LdmFD  R13!,{R0-R3,pc}^
+
+.`NoStackSpace Adr   R0,`HeapError
+               Swi   "OS_GenerateError"
+
+.`HeapError    DCD   &FFFF00
+               EquS "Error during stack extension (probably a stray pointer)"
+               DCB   0
+Align
+
+.`NoMallocSpace Adr   R0,`MallocSp
+               Swi   "OS_GenerateError"
+
+.`MallocSp     DCD   &FFFF00
+               EquS "No room for malloc()"
+               DCB   0
+Align
+
+.`NoReallocSpace Adr   R0,`ReallSp
+               Swi   "OS_GenerateError"
+
+.`ReallSp      DCD   &FFFF00
+               EquS "No room for realloc()"
+               DCB   0
+Align
+
+.`BadFree      Adr   R0,`FreeError
+               Swi   "OS_GenerateError"
+
+.`FreeError    DCD   &FFFF00
+               EquS "Error during free() (probably a stray pointer)"
+               DCB   0
+Align
+
+.`heapstart

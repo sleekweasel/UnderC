@@ -1,0 +1,9 @@
+Filer_CloseDir RAM::RamDisc0.$
+echo shut { > ram:shut }
+settype ram:shut obey
+create RAM:OUT 0
+SetType ram:out text
+Filer_OpenDir RAM::RamDisc0.$
+WimpSlot 480k 480k
+<obey$dir>.aout { > RAM:OUT }
+shut

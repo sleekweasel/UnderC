@@ -1,0 +1,4 @@
+
+##  Expression-types
+
+extern Tnode *typeof ( Enode *node );

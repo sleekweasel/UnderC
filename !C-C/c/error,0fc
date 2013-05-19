@@ -1,0 +1,357 @@
+/*
+ *  error.c  -- Error reporting.
+ */
+
+#include "malloc.h"
+#include "tree.h"
+#include "error.h"
+#include "prepr.h"
+#include "tokens.h"
+## This include keeps types.h happy.
+#include "expr.h"
+#include "types.h"
+#include "parse.h"
+#include "struct.h"
+
+extern int	switches		= 0,
+			lineswitches	= 0,
+			pragmaswitches	= 0,
+			err_indent		= 0,
+			doing_flags		= 0;
+
+extern char keywords[][9] =  /* Extern for tokens.c only */
+{
+	"«StKwd»",
+	"auto",		"break",	"case",		"char",		"const",	"continue",
+	"default",	"do",		"double",	"else",		"enum",		"extern",
+	"float",	"for",		"goto",		"if",		"int",		"long",
+	"register",	"return",	"short",	"signed",	"sizeof",	"static",
+	"struct",	"switch",	"typedef",	"union",	"unsigned",	"void",
+	"volatile",	"while",
+	"«EndKwd»",
+	"«eof»",
+	"ChrFloat",	"LongDbl",	"«ErrTyp»",	"sys"
+};
+
+
+static char symbols[][5] = {
+	"«¿»",
+	".id.",	".%i.",	".%f.",	".%c.",	".%s.",	"L%c",	"L%s",
+			"...",	"(.",	".)",
+	"[",	"]",	".(.)",	".",	"->",	".++",	".--",
+	"++.",	"--.",	"SzOf",	"&.",	"*.",	"+.",	"-.",	"~.",	"!.",
+			"TCst",
+	"*",	"/",	"%",	"+",	"-",
+	"<<",	">>",	"<",	">",	"<=",	">=",	"==",	"!=",
+	"&",	"^",	"|",	"&&",	"||",	"?",	":",	"=",
+	"*=",	"/=",	"%=",	"+=",	"-=",	"<<=",	">>=",	"&=",	"^=",
+			"|=",
+	",",
+	";",	"{",	"}"
+};
+
+
+static char errorst[][8]={ "Doing", "Warning", "ANSI", "Alert", "Error",
+							"Failure", "Abort" };
+
+static char typereport[][16]={	/* From struct.h */
+	"NamesDiffer",
+	"PointersDiffer",
+	"GeneralMismatch",
+	"StructOffset",
+	"StructBit",
+	"Ellipsis",
+	"ConstVolatile",
+	"ArraySize",
+	"ArrayPointer",
+	"Weakened"
+};
+
+extern int isalpha(char ch) {
+	return	( 'A'<=ch && ch<='Z' ) ||
+			( 'a'<=ch && ch<='z' ) || ch=='_' ;
+}
+
+extern int isdigit(char ch) { return ( '0'<=ch && ch<='9' ); }
+
+extern int isxdigit(char ch) {
+  return ( '0'<=ch && ch<='9' ) ||
+         ( 'A'<=ch && ch<='F' ) ||
+         ( 'a'<=ch && ch<='f' );
+}
+
+extern void printf( char *line /* , ... */ );
+
+static char *_pri=0;
+
+static void print ( char **params ) {   /* params <- &line */
+
+##	sys("OS_WriteC",'«');
+	char *ptr, *line; line=*params;
+	int *nextthing; nextthing=params;
+
+	if ( _pri==0 ) { _pri=malloc(64); }
+
+	for ( ptr=line; *ptr; ptr++ )
+	{
+
+		/* Sorry for this if..else tree, but I have no switch() */
+
+		if (*ptr != '%') sys("OS_WriteC",*ptr) ;  /* char */
+else	if (*++ptr == '%') sys(0x125);            /* '%' */
+else	if (*ptr == 's')                          /* string to \0 or «null» */
+			if (*++nextthing==0)
+				sys("OS_Write0"," «Null» ");
+			else
+				sys("OS_Write0",*nextthing);
+else	if (*ptr == '$')                          /* As %s but ctl 0xXX */
+			if (*++nextthing==0)
+				sys("OS_Write0"," «Null» ");
+			else
+			{
+				char *p;
+				for (p=*nextthing; *p; p++ )
+					if ( *p<' ' || *p==127 )
+						printf("0x%X",*p);
+					else
+						sys("OS_WriteC",*p);
+			}
+else	if (*ptr == 'c') sys("OS_WriteC",*++nextthing);  /* Char */
+else	if (*ptr == 'C') sys("OS_WriteC",
+								((*++nextthing)<' ' || *nextthing>'~')
+							?
+								'.':*nextthing);         /* Char, ctl '.' */
+else	if (*ptr == 't')                                 /* Tok->is */
+		{
+			int tok; tok=*++nextthing;
+			if ( tok & SignSet_Q )
+			{
+				sys("OS_Write0","set_");
+				if ( tok & Unsigned_Q )	sys("OS_Write0","un");
+				sys("OS_Write0","signed_");
+			}
+			else
+			{
+				if ( tok & Unsigned_Q )	sys("OS_Write0","unsetunsigned_");
+			}
+			if ( tok & Const_Q )	sys("OS_Write0","const_");
+			if ( tok & Volatile_Q )	sys("OS_Write0","volatile_");
+			if ( tok & Alt_Q )		sys("OS_Write0","alt_");
+			tok = tok & FlagsAfter;
+			if ( doing_flags & (1<<31) ) printf("%d:",tok);
+			if ( tok<KeyWords )
+				sys("OS_Write0",symbols[tok]);
+			else
+				sys("OS_Write0",keywords[tok-KeyWords]);
+		}
+else	if (*ptr == 'T')  /* Token(is,data) */
+		{
+			Token *tok; int is;
+			tok=*++nextthing; is=tok->is;
+			if ( is & Alt_Q ) {
+				is=is & ~Alt_Q;
+				if ( is==Ident ) {
+					IDnode *id; id=tok->data;
+					printf("\\*(%s)" ,id->id.name);
+					return;
+				}
+				if ( is==Comma ) {
+					printf("º");
+					return;
+				}
+				printf("Alt-");
+			}
+			if ( is & ~FlagsAfter ) {
+				printf("-%x-",is & ~FlagsAfter);
+				is = is & FlagsAfter;
+			}
+			if ( is==Ident    ) printf("\\(%s)" ,tok->data);
+	else	if ( is==IntConst ) printf("Z(%s)"  ,tok->data);
+	else	if ( is==RealConst) printf("R(%s)"  ,tok->data);
+	else	if ( is==CharConst)
+				if ( ' '<=tok->data && tok->data<127 )
+					printf("'%c'" ,tok->data);
+				else
+					printf("'0x%x'" ,tok->data);
+	else	if ( is==String   ) printf("\"%S\"" ,tok->data);
+	else	if ( is==WideChar ) printf("L'0x%x'",tok->data);
+	else	if ( is==WideStr  ) printf("L\"%W\"",tok->data);
+	else	if ( is==Dot ||
+				 is==Arrow ) printf("%t%d",is,tok->data);
+	else	if ( is<KeyWords  )
+				sys("OS_Write0",symbols[is]);
+			else
+				printf("%t",is);
+		}
+else	if (*ptr == 'S')   /* <len><string> */
+		{
+			int n, *i; char *p;
+			i=*++nextthing; n=*(i++); p=i;
+			for (; n--; p++)
+				if ( *p<' ' || *p==127 )
+					printf("0x%X",*p);
+				else
+					sys("OS_WriteC",*p);
+		}
+else	if (*ptr == 'W')   /* <len><int*> lengthed wide string */
+		{
+			int n, *i;
+			i=*++nextthing; n=*(i++);
+			for (; n--; i++)
+				if ( *i<' ' || *i==127 )
+					printf("0x%X",*i);
+				else
+					if ( *i>255 )
+						printf("0x%x",*i);
+					else
+						sys("OS_WriteC",*i);
+		}
+else	if (*ptr == 'x')   /* Int as 0xXXXXXXXX */
+		{
+			sys("OS_ConvertHex8",(*++nextthing,_pri,19));
+			sys("OS_Write0",_pri);
+		}
+else	if (*ptr == 'X')   /* Int as 0xXX */
+		{
+			sys("OS_ConvertHex2",(*++nextthing,_pri,19));
+			sys("OS_Write0",_pri);
+		}
+else	if (*ptr == 'i' || *ptr == 'd')  /* Int as decimal */
+		{
+			sys("OS_ConvertInteger4",(*++nextthing,_pri,19));
+			sys("OS_Write0",_pri);
+		}
+else	if (*ptr == ' ')  /* int spaces */
+		{
+			int sp; sp=*++nextthing;
+			while ( sp-->0 ) sys(0x120);
+		}
+else	if (*ptr == 'r')  /* typ_xxx enum */
+		{
+			int typ; typ=*++nextthing;
+			printf("typ-%d",typ);
+			if ( !typ ) printf("_OK");
+			else {
+				int i; i=9; /* typ_weak */
+				while ( i-- ) {
+					if ( ( 1<<i ) & typ ) printf("_%s",typereport[i]);
+				}
+			}
+		}
+else	if (*ptr == 'y' ) /* Type pointer: */
+		{				  /* char (*(*[3])())[5] :== [3] * () * [5] char; */
+			Tnode *tn; tn=*++nextthing;
+			sys("OS_WriteC",'<');
+			while ( tn>0x8000 )
+			{
+				int ist; ist=tn->is&FlagsAfter;
+				if ( ist==OpenArray )	printf(" [%d]",tn->value); else
+				if ( ist==Function )	printf(" ()"); else
+				if ( ist==Typedef )
+				{
+					IDnode *id; id=T2ID(tn);
+					printf(" typedef-%s",id->id.name), tn=0;
+				}
+				else
+				if ( ist==Struct || ist==Union || ist==Enum )
+				{
+					IDnode *id; id=T2ID(tn);
+					printf(" %t-%s",tn->is,id->id.name), tn=0;
+				}
+				else
+				printf(" %t",tn->is);
+				if ( tn ) tn=tn->type;
+			}
+			if ( tn ) printf(" %t >",tn); else printf(" >");
+		}
+else	if (*ptr == 'E' ) /* Expression */
+		{
+			Enode *e; e=*++nextthing;
+			printexpr(e);
+		}
+else	if (*ptr == 'e' ) /* Expression */
+		{
+			Enode *e; e=*++nextthing;
+			prettyexpr(e,0);
+		}
+else	if (*ptr == 'L' ) /* STnode list, or other STnode-type thing */
+		{
+			STnode *sn; sn=*++nextthing;
+			while ( sn>0x8000 )
+			{
+				if ( sn->bitlen )
+					printf("%y %d:%d+%d:%s, ",
+						sn->type,sn->offset,sn->bitstart,sn->bitlen,sn->name);
+				else
+					printf("%y %d:%s, ",sn->type,sn->offset,sn->name);
+				sn=sn->next;
+			}
+			if ( sn ) printf("%t",sn);  /* void or ... */
+			else printf("«eol»");
+		}
+else	if (*ptr == 'Y' ) /* Type pointer, full expansion to 1st level */
+		{                 /* (Affects typedef, function params and structs) */
+			Tnode *tn; tn=*++nextthing;
+			sys("OS_WriteC",'<');
+			while ( tn>0x8000 )
+			{
+				int ist; ist=tn->is&FlagsAfter;
+				if ( ist==OpenArray )	printf(" [%d]",tn->value); else
+				if ( ist==Function ) /* Params in value as stnodes */
+					printf(" (%L)",tn->value);
+				else
+				if ( ist==Typedef )
+				{
+					IDnode *id; id=T2ID(tn);
+					printf(" typedef-%s",id->id.name);
+				}
+				else
+				if ( ist==Enum )
+				{
+					IDnode *id; id=T2ID(tn);
+					printf(" %t-%s",tn->is,id->id.name), tn=0;
+				}
+				else
+				if ( ist==Struct || ist==Union ) /* List in value */
+				{
+					IDnode *id; id=T2ID(tn);
+					printf(" %t-%s {%L}:%d",
+						tn->is,id->id.name,tn->type,id->size);
+					tn=0;
+				}
+				else
+				printf(" %t",tn->is);
+				if ( tn ) tn=tn->type;
+			}
+			if ( tn ) printf(" %t >",tn); else printf(" >");
+		}
+else	printf("%%%c",*ptr);
+	}
+##	sys("OS_WriteC",'»');
+
+	escapeabort();
+}
+
+
+extern void escapeabort() {
+	int i,j,k,l,m;
+	sys("OS_ReadEscapeState",(j,k),(l,m),i);
+	if ( i & 2 /* Carry */ ) {
+		sys("OS_Exit",("\0\0\0\0Escape abort",i));
+	}
+	return;
+}
+
+extern void printf (char *line /* , ... */ ) { print(&line); }
+extern void vprintf (char **line) { print(line); }
+extern void error (int errno, char *line /* , ... */ ) { verror(errno,&line); }
+extern void verror (int errno, char **line ) {
+	int dep;
+	if ( errno==Doing && (*line)[1]==':' && ((~doing_flags) & 1<<(**line-'@')))
+		return;
+	printf("%s: %i, %s: ",fname,fline,errorst[errno]);
+	for ( dep=0; dep<err_indent; dep++) sys(0x120);
+	print(line);
+	printf("\n");
+	escapeabort();
+}

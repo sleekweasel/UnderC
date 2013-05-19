@@ -1,0 +1,10 @@
+Set CtoC$Dir <Obey$Dir>
+Set CtoC$Path <Obey$Dir>.
+Set Compiler$Path <Obey$Dir>.^.
+Set Alias$OpenDir Filer_OpenDir <Obey$Dir>.o
+OpenDir
+Set Alias$OpenDir Filer_OpenDir <Obey$Dir>.h
+OpenDir
+Set Alias$OpenDir Filer_OpenDir <Obey$Dir>.c
+OpenDir
+UnSet Alias$OpenDir

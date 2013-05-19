@@ -1,0 +1,31 @@
+
+##   macro.h -- Removed from prepr.c for size reasons.
+##              Expands macros and incidentally tokenise-monospaces line.
+##
+##   Might be a good idea if macro introduces some 'hidden' tokens where a
+##    macro is started/ended to allow the tokeniser to maintain a 'macro
+##    expanding' flag warning of things like ++ and function calls in macros.
+
+##	MACnode is used like this:
+##
+##		Bnode base is for storage, and includes name.
+##
+##		->params is the id list, \0 sep, \0\0 term.
+##
+##		->body is the replace string,	\1 introduces a param number,
+##										\2 introduces a quoted param's number,
+##										\3 is ## concatenation
+
+struct macro_node {
+	Bnode base;
+	char *params, *body;
+};
+
+typedef struct macro_node MACnode;
+
+extern int MACNODE;
+
+extern MACnode *macrotree;
+
+extern char  *macroexpand( char * );
+

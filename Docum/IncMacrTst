@@ -1,0 +1,60 @@
+/*   Try again, this is an arithmetic test. */
+
+#pragma dumptrace off
+#pragma strongEOF off
+#pragma iflines   off
+#pragma macrodef  off
+#pragma include   off
+#pragma tokenshow on
+
+#ifdef LOWER
+
+At = d -> fred ;
+
+#ifndef d
+#define d 1
+#elif d==1
+#undef d
+#define d 2
+#elif d==2
+#undef d
+#define d 3
+#elif d==3
+#undef d
+#define d 4
+#elif d==4
+#undef d
+#define d 5
+#elif d==5
+#undef d
+#define d 6
+#elif d==6
+#undef d
+#define d 7
+#elif d==7
+#undef d
+#define d 8
+#elif d==8
+#undef d
+#define d 9
+#else d==9
+#undef d
+#define d 10
+At_the_very_bottom;
+6+5+=4;
+#endif
+
+#if defined d && d < 10
+#include "adfs:$.textfile"
+#endif
+#else
+#define LOWER
+#define d 1
+#undef d
+First_Include;
+#include "adfs:$.textfile"
+Second_Include;
+#undef d
+#include "adfs:$.textfile"
+After_all;
+#endif

@@ -1,0 +1,48 @@
+The C Version
+-------------
+
+Generally, the whole thing needs to be rewritten, because it's too monolithic
+ in many places. It is, however fairly nicely modular, so once it's working
+ in an integer form, it can be rewritten with the benefit of switch etc.
+
+ * The tokeniser:
+
+   i.   The '...' ellipsis may be wrongly coded for the '..' error.
+
+   ii.  The character '\n' '\r' '\0xA' conflict needs to be resolved.
+
+        Solution: \r is 13, \n is 10, stdout will open to
+                     VDU:     for text-stream
+                     RAWVDU:  for binary-stream
+          For stdin.. KBD: and RAWKBD: for text/binary, but WIMP tasks will
+           NEVER need this.
+
+ * The preprocessor:
+
+   i.   Macros' ## directives do not currently inhibit macro replacement
+         in macros on either side of the ##.
+
+ * The expression parser:
+
+   i.   Needs testing, particularly the comma-in-function problem.
+
+   ii.  Another probable thing: Some things, mainly assignment operators
+         have been told to seek for postfix expressions and steal them
+         from higher priority functions.
+        This is me not understanding precisely what ANSI wants.
+         I think they should flag an error rather than trying to take things.
+         
+ * The type parser:
+
+   i.   sizeof ( struct foo { int a; } ) will actually declare foo.
+
+  ii.   enum foo extern; and similar do not flag errore.
+
+ * RunAsb.o:
+
+   i.   The oVerflow flag should NOT be changed by the stack extension code.
+
+   ii.  Not a bug, but it should deallocate the empty-but-one block for
+         allocation speed.
+
+   iii. Malloc() and family should use OS_Heap to read blocksize.

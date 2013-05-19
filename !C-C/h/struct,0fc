@@ -1,0 +1,53 @@
+
+## Structure, union and enum stuff.
+
+## STnodes are also used by function-Tnodes as parameter-list holders
+
+typedef struct stnode STnode;
+struct stnode {
+				   int  MAGIC;
+				STnode *next;
+				  char *name;
+				 Tnode *type;
+				   int  offset;
+				   int	bitstart, bitlen; /* Should be char */
+			  };
+
+##---------------------------------------------------------------------------
+extern int STNODE;
+extern STnode *new_stnode();
+extern int free_stnode(STnode *kill);
+##---------------------------------------------------------------------------
+
+## tokval is Struct or Union.  decl is const/volatile/extern etc.
+extern void struct_specifier( int tokval, int decl );
+
+## decl is const/volatile/extern etc.
+extern void enum_specifier( int decl );
+
+## Read struct/union tag and complete new-> or new.
+extern void parsefield( Enode *new );
+
+##---------------------------------------------------
+
+##	Free stlist (free_STlist)
+extern void stlfree( STnode *st );
+
+##	duplicate stlist
+extern STnode *stldup( STnode *st );
+
+##	compare stlists. Return 0-equal  1-same barring names  etc (see below)
+extern int stlneq( STnode *base, STnode *checkme );
+
+enum {	/* Table of strings corresponding to these in error.c */
+		typ_name=1,		/* Names in a STnode (function dec usu) differ */
+		typ_pointer=2,	/* Both pointers, only types mismatch (void* okay) */
+		typ_type=4,		/* General mismatch */
+		typ_offset=8,	/* Structs offsets mismatch */
+		typ_bit=16,		/* Structs bitlengths/bitstarts mismatch */
+		typ_ellipsis=32,/* Ellipsis mismatch */
+		typ_mods=64,	/* Const/Volatile mismatch */
+		typ_arrsz=128,	/* Array size mismatch */
+		typ_arrpt=256,	/* Array/pointer mismatch (advisory) */
+		typ_weak=512	/* Type weakening (enum->long, typedef->basetype) */
+};

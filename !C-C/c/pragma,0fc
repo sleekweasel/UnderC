@@ -1,0 +1,89 @@
+/*   pragma.c -- removed to here for fast updating.
+ *
+ *   Pragma toggles:
+ */
+
+extern int	tokenshow_flag,			/* From tokens.c  */
+			tokenkill_flag,			/* From tokens.c  */
+			dumptrace_flag,			/* From main.c */
+
+			macrodef_flag,			/* From prepr.c */
+			iflines_flag,			/* From prepr.c */
+			include_flag,			/* From prepr.c */
+
+			doing_flags,			/* From error.c */
+
+			uglyexpr_flag,			/* From expr.c */
+
+			loosecharstar_flag,		/* From typemod.c */
+
+			sys_flag,				/* From parse.c */
+
+			trigraph_flag,			/* From prepr.c */
+			strongEOF_flag,			/* From prepr.c */
+			nestedcomments_flag;	/* From prepr.c */
+
+extern char *sys_include;			/* From prepr.c */
+extern char *basedir;				/* From prepr.c */
+
+#include "malloc.h"
+#include "strings.h"
+#include "error.h"
+
+static char *skiphead(char *lptr) { while( *lptr && *lptr<=' ' ) lptr++; return lptr; }
+static int idmatch(char *a, char *b) { while ( *b && *a==*b ) a++,b++; return *b==0; }
+
+extern void do_pragma (char *line, char *lptr) {
+	int *flag; flag=0;
+	lptr=skiphead(lptr);
+
+	if ( idmatch(lptr,"sysinclude") ) {
+		char *s; s=lptr=skiphead(lptr+10);
+		while ( *s>' ' ) s++; *s=0;
+		sys_include=strdup(lptr);
+		free(line);
+		return;
+	}
+	if ( idmatch(lptr,"basedir") ) {
+		char *s; s=lptr=skiphead(lptr+7);
+		while ( *s>' ' ) s++; *s=0;
+		basedir=strdup(lptr);
+		free(line);
+		return;
+	}
+
+	if ( idmatch(lptr,"tokenshow") )		flag=&tokenshow_flag,	lptr+=9;
+	if ( idmatch(lptr,"tokenkill") )		flag=&tokenkill_flag,	lptr+=9;
+
+	if ( idmatch(lptr,"dumptrace") )		flag=&dumptrace_flag,	lptr+=9;
+
+	if ( idmatch(lptr,"macrodef") )			flag=&macrodef_flag,	lptr+=8;
+	if ( idmatch(lptr,"iflines") )			flag=&iflines_flag,		lptr+=7;
+	if ( idmatch(lptr,"include") )			flag=&include_flag,		lptr+=7;
+else
+	if ( idmatch(lptr,"doing") )			flag=&doing_flags,		lptr+=5;
+
+	if ( idmatch(lptr,"uglyexpr") )			flag=&uglyexpr_flag,	lptr+=8;
+
+	if ( idmatch(lptr,"loosecharstar") )flag=&loosecharstar_flag,	lptr+=13;
+
+	if ( idmatch(lptr,"sys") )				flag=&sys_flag,			lptr+=3;
+
+	if ( idmatch(lptr,"trigraphs") )		flag=&trigraph_flag,	lptr+=9;
+	if ( idmatch(lptr,"strongEOF") )		flag=&strongEOF_flag,	lptr+=9;
+	if ( idmatch(lptr,"nestcomments") )	flag=&nestedcomments_flag,	lptr+=12;
+
+	if ( flag ) {
+		lptr=skiphead(lptr);
+		if ( *lptr==0 )            *flag^=1; else
+		if ( '@'<=*lptr && *lptr<='_' )
+		while ('@'<=*lptr && *lptr<='_')
+			*flag^=1<<(*lptr++-'@');
+		else
+		if ( idmatch(lptr,"on")  ) *flag=1;  else
+		if ( idmatch(lptr,"off") ) *flag=0;  else
+		error(Error,"Expected 'on', 'off' or nothing after the #pragma flag.");
+	} else
+	error(Warn,"Ignoring unrecognised #pragma");
+	free(line);
+}

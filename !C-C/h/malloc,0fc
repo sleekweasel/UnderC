@@ -1,0 +1,20 @@
+
+## malloc.h - Goes with RunAsb.o
+
+## #define NULL (void*) 0
+
+extern void* malloc ( int );
+extern void* realloc( void * , int );
+extern void  free   ( void * );
+
+##  malloc() realloc() and calloc() all return null if the allocation failed.
+##   An error should only occur if the heap has been corrupted.
+##   'No room' should return NULL.
+##
+## malloc(0) returns size of largest block, realloc(0,0) free space in heap
+##
+##  Suggested route is this: Call OS_Heap as required. If an error occurs, call
+##   OS_Heap 1. If no error is returned, the heap has integrity and return of 0
+##   is fine. Otherwise the heap is corrupt and an error should be raised.
+##
+##  Also wrong is reading the size of a block directly. Use OS_Heap 6.

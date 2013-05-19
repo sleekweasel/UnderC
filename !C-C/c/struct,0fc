@@ -1,0 +1,454 @@
+
+#echo struct.c 
+
+#include "malloc.h"
+#include "tree.h"
+#include "strings.h"
+#include "error.h"
+#include "tokens.h"
+#include "expr.h"
+#include "types.h"
+#include "struct.h"
+#include "parse.h"
+
+##---------------------------------------------------------------------------
+extern int STNODE='STND';
+extern STnode *new_stnode() {
+	STnode *new; new=malloc(sizeof(STnode));  /* Only direct allocation */
+	new->MAGIC=STNODE;
+	return new;
+}
+extern int free_stnode(STnode *kill) {
+	if ( !kill )
+		return error(Failed,"free_stnode was given NULL");
+	if ( kill->MAGIC != STNODE )
+		return error(Failed,"free_stnode was given !STNODE");
+	free(kill);
+}
+##---------------------------------------------------------------------------
+## Enum definition.
+
+void enum_list(Tnode *type) {
+	Token *see; int setval; IDnode *eid;
+	setval=0; eid=T2ID(type);
+	error(Doing,"C:Enum entry");
+	see=seetoken();
+	do
+	{
+		if ( see->is == Ident )
+		{
+			IDnode *id; id=seekadd(see->data,id_globals,sizeof(IDnode),IDNODE);
+			id->ty.is=Enum | Const_Q; id->ty.type=type;
+			id->size=0; id->offset=eid->offset; eid->offset=id;
+## Cannot take the size of an enum const..
+			see=taketoken();
+			if ( see->is==Assign )
+			{
+				taketoken();
+				setval=constant_expression("enum assignment");
+				see=seetoken();
+			}
+			id->ty.value=setval++;
+			error(Doing,"C:Enum item %s=%d tnode=%x tok=%T",
+										id->id.name,id->ty.value,id,see);
+		}
+		else
+			error(Alert,"Expected identifier in enum");
+		if ( see->is != CloseCurly )
+		{
+			eatatoken(Comma,"Expected Comma or CloseCurly in enum");
+			see=seetoken();   
+		}
+	}
+	while ( see->is == Ident );
+}
+
+##	Have enountered/eaten 'Enum'. Anticipating one of
+##		enum foo			Simple declaration use.
+##		enum foo { decl }	Simple definition (poss with declarators)
+##		enum { decl }		Simple specification (declarators mandatory)
+
+Tnode *enum_specifier( int decl )
+{
+	IDnode *id;
+	Token *see;
+	char *name;
+	see=seetoken(); id=0;
+
+	error(Doing,"C:Enum specifier, see=%T",see);
+
+	if ( see->is==Ident )
+	{
+		name=see->data; see->data=0;	/* Get name */
+		see=taketoken();				/* Next token */
+	}
+	else
+		name="";
+
+	error(Doing,"C:Enum '%s' specifier, tok=%T",name,see);
+
+	if ( see->is!=OpenCurly && !*name )
+		error(Error,"Enum needs definition or identifer.");
+	else
+	{
+		if ( see->is==SemiColon && decl&0xF000 && decl&0xF000<0xE000 )
+			error(Alert,"Empty enum declaration was given storage specs.");
+		if ( see->is==SemiColon || see->is==OpenCurly )
+			id=seekfind(name, st_locals);	/* Local? (def'n) */
+		else
+			id=Lseekfind(name, st_locals);	/* Global? */
+
+		if ( id && id->offset && see->is==OpenCurly )
+		{
+			error(Alert,"Redefinition of %t %s as an Enum made anonymous.",
+				id->ty.is,name);
+			free(name); name=""; id=0; /* Null name never found by seekfind */
+		}
+
+		if ( id==0 )
+		{
+			id=seekadd(name, st_locals,sizeof(IDnode),IDNODE);	/* Create if not. */
+			id->ty.is=Enum;
+			id->ty.value=0;
+			id->ty.type=0;
+			id->offset=0;		/* Becomes a linked list to ids */
+			id->size=4;			/* Enums are int until further notice */
+		}
+
+		if ( id->ty.is!=Enum ) {
+			error(Error,"%t %s is not an enum",id->ty.is,name);
+			id=0;
+		}
+
+		if ( see->is==OpenCurly )
+		{
+			error(Doing,"C:Enum '%s' specifier, see=%T",name,see);
+			taketoken();		/* Start to define this enum */
+			enum_list(ID2T(id));	/* In: type  Out: Completed type */
+			eatatoken(CloseCurly,"Expected CloseCurly to end enum def'n.");
+		}
+## 'type' now points to a node for the enum.
+	}
+	if ( *name ) free(name);	/* Type's node has a copy of this */
+
+	if ( id ) return ID2T(id);  else { Tnode *tn; tn=Int; return tn; }
+}
+
+##---------------------------------------------------------------------------
+## Struct or Union definition.
+
+##	STnode {STnode *next;		Next entry - 0 for end
+##			  char *name;		Name, 0 for no-name
+##			 Tnode *type;		Type of node
+##			   int  offset,		byte offset from struct start. (0 for unions).
+##					length,		byte length, bit length if bitstart != -1
+##					bitstart;	-1 if none, 0-31 otherwise.
+##			};
+##	Make a list of stnodes and link onto the type.
+
+static void struct_decl_list(Tnode *type);
+
+##	Have enountered/eaten 'Struct'/'Union'. Anticipating one of
+##		struct foo ;		Recondite rule. No storage class allowed.
+##		struct foo			Simple declaration use.
+##		struct foo { decl }	Simple definition (poss with declarators)
+##		struct { decl }		Simple specification (declarators mandatory)
+
+Tnode *struct_specifier( int keyw, int decl )
+{
+	char *name;
+	Token *see;
+	IDnode *id;
+	see=seetoken();
+	error(Doing,"C:Defn of %t, see=%T",keyw,see);
+
+	if ( see->is==Ident )
+		{ name=see->data; see->data=0; see=taketoken(); }
+	else
+	{
+		name="";
+		if ( see->is != OpenCurly )
+			error(Error,"Missing identifier or declaration after %t",keyw);
+	}
+
+	error(Doing,"C:Defn of %t '%s', see=%T",keyw,name,see);
+
+	if ( see->is==SemiColon && !*name )
+		error(Error,"Recondite declaration needs an identifier.");
+	else
+	{
+		if ( see->is==SemiColon && decl&0xF000 && decl&0xF000<0xE000 )
+			error(Alert,"Storage specifier meaningless for recondite.");
+
+		if ( see->is==SemiColon || see->is==OpenCurly )
+			id=seekfind(name, st_locals); /* Local? (def'n/recondite) */
+		else
+			id=Lseekfind(name, st_locals); /* Global? */
+
+		if ( id && id->ty.type && see->is==OpenCurly )
+		{
+			error(Error,"Redefinition of %t %s as a %t made anonymous.",
+				id->ty.is,name,keyw);
+			free(name); name=""; id=0; /* Null name never found by seekfind */
+		}
+
+		if ( id==0 )
+		{
+			id=seekadd(name, st_locals, sizeof(IDnode)); /* Create if not. */
+			if ( id )	/* Set struct/union */
+			{
+				id->ty.is=keyw; id->ty.value=0; id->ty.type=0;
+				id->size=0; id->offset=0;
+			}
+		}
+		else
+		if ( id->ty.is!=keyw )
+			error(Error,"%t %s is not a %t",id->ty.is,name,keyw);
+
+		if ( see->is==OpenCurly )
+		{
+			taketoken();		/* Start to define this struct/union */
+			struct_decl_list(ID2T(id)); /* In: type  Out: Completed type */
+			eatatoken(CloseCurly,"Expected CloseCurly to end %t def'n.",keyw);
+		}
+
+		error(Doing,"C:Past struct/union definition part");
+
+## 'type' now points to a node for the struct/union.
+	}
+
+	if ( *name ) free(name);	/* Type's node has a copy of this */
+
+	return ID2T(id);
+}
+
+static void struct_decl_list(Tnode *type)
+{
+##		<struct-declaration-list>:
+##			<< <spec-qual-list> <struct-declarator-list> ; >>+
+##		<struct-declarator-list>:
+##			<struct-declarator> << , <struct-declarator> >>*
+##		<struct-declarator>:
+##			<declarator>
+##		OR	<declarator>opt : <constant-expression> [but must be un/signed int]
+
+	STnode	*top, *end;
+	Tnode	*thistype, *thisdecl;
+	char	*ident;
+	Token	*see;
+	int		byteoffset, bitoffset, keyw, maxf;
+
+	byteoffset=0; bitoffset=0; maxf=0; keyw=type->is;
+
+	error(Doing,"C:Start struct decl list");
+
+	top=end=new_stnode(); /* make handling regular */
+
+	error(Doing,"C:Got top of struct");
+
+	do {
+		thistype=spec_qual();		/* Read the base type */
+		error(Doing,"C:Basetype %y",thistype);
+		do {
+			see=seetoken();
+			error(Doing,"C:So.. got %y, looking at %T",thistype,see);
+			if ( see->is == Colon ) /* Decl optional for anon bitfield */
+				thisdecl=Int, ident="";
+			else
+			{
+				thisdecl=declarator( &ident, thistype ); /*Read decl*/
+
+				error(Doing,"C:Declaration %y %s",thisdecl,ident);
+
+				if ( thisdecl >= 0x8000 ) /* Modified type? */
+					if ( thisdecl->is == Function )
+					{
+						Tnode *nu; nu=new_tnode();
+						nu->is=Star; nu->value=0;
+						nu->type=thisdecl; 
+						thisdecl=nu;
+						error(Error,"Function in structure made pointer-to.");
+					}
+
+				see=seetoken();
+			}
+while(0);
+			error(Doing,"C:Declaration_chkd %y '%s'",thisdecl,ident);
+
+			if ( see->is == Colon )
+			{
+				STnode *nu;
+#okay Pointer used in bitwise 'and' is <0x8000: a flagset.
+				if ( thisdecl>=0x8000 || (thisdecl & FlagsAfter)!=Int )
+				{
+##		Make a "" entry to keep this data,
+##		in case it's the only reference
+					STnode *nu; nu=new_stnode();
+					error(Error,"Structure fields can only be un/signed int");
+					nu->name=""; nu->next=0; nu->offset=0; nu->bitlen=0;
+					nu->type=thisdecl; thisdecl=Int;
+					end->next=nu; end=nu;
+				}
+
+				nu=new_stnode();
+				nu->name=ident; ident=0;
+				nu->type=thisdecl; thisdecl=0;
+				nu->next=0; end->next=nu; end=nu;
+
+				taketoken();		/* Eat Colon */
+				nu->bitlen=constant_expression("bitfield specifier");
+
+				if ( 1>nu->bitlen || nu->bitlen>32 )
+				{
+					error(Error,"Struct field length out of range (%d)",
+								nu->bitlen);
+					nu->bitlen=32;
+				}
+
+				if ( bitoffset && bitoffset+nu->bitlen > 31 )
+					bitoffset=0, byteoffset+=4;
+				nu->bitstart=bitoffset;
+				if ( keyw==Struct )
+					nu->offset=byteoffset=(byteoffset+3)&~3;
+				else
+					nu->offset=0;
+				bitoffset+=nu->bitlen;
+
+				if ( maxf<4 ) maxf=4;
+
+				see=seetoken();
+			}
+			else /* Not a bitfield */
+			{
+				STnode *nu; int siz;
+				if ( !ident || !*ident )
+					error(Error,"Missing ident in %t",keyw);
+				nu=new_stnode();
+				nu->name=ident; ident=0;
+				siz=typsize(thisdecl);
+				if ( maxf<siz ) maxf=siz;
+	error(Doing,"C:element %y is size %d",thisdecl,siz);
+				nu->type=thisdecl; thisdecl=0;
+				if ( bitoffset ) byteoffset+=4, bitoffset=0;
+				if ( siz!=1 ) byteoffset=(byteoffset+3)&~3;
+				if ( keyw==Struct )
+					nu->offset=byteoffset;
+				else
+					nu->offset=0;
+				nu->bitlen=0;
+				nu->next=0; end->next=nu; end=nu;
+				byteoffset+=siz;
+			}
+			error(Doing,"C:After struct decl bit, see=%T",see);
+		}
+		while ( see->is!=SemiColon && /* Suppresses comma expectation */
+				eatatoken(Comma,"Expected Comma during %t def'n",keyw) );
+	} while ( eatatoken(SemiColon,"Expected a SemiColon to end %t def'n",keyw)
+				&& (see=seetoken(), see->is!=CloseCurly) );
+
+	if ( top != type->type )
+	{
+		type->type=top->next;
+		free(top);
+	}
+
+	{
+		IDnode *id; id=T2ID(type);
+		if ( keyw==Struct )
+		{
+			if ( bitoffset ) byteoffset+=4;
+			id->size=(byteoffset+3)&~3;
+		}
+		else
+			id->size=maxf;
+	}
+##
+## Nothing to return: modified structure.
+##
+}
+
+## Read token and complete <new>, returning new->left as 0 or pointer to tag.
+extern void parsefield( Enode *new )
+{
+	Token *see; see=seetoken();
+	if ( see->is != Ident )
+		error( Error, "Expected identifier after %t",new->is);
+	else
+	{
+##		Check type vs new->right->type and new->is==Arrow/Dot
+		new->left=see->data; see->data=0;
+		new->data=-1;
+		new->type=0;
+		taketoken();
+	}
+}
+
+##--------------------------------------------------------------
+
+##	Free stlist (free_STlist)
+extern void stlfree( STnode *st ) /* free_STlist */
+{
+	STnode *s;
+	while ( st>0x8000 )
+	{
+		typfree( st->type );
+		s=st; st=st->next; free(s);  /* free( st \ st=st->next ); */
+	}
+}
+
+##	duplicate stlist
+extern STnode *stldup( STnode *st )
+{
+	STnode *top, **nu, *n; nu=&top;
+	while ( st>0x8000 )
+	{
+		n=*nu=new_stnode();
+		nu=&n->next; n->next=0;
+		if ( st->name )
+			n->name	= strdup(st->name);
+		else
+			n->name	= 0;
+		n->type		= typdup(st->type);
+		n->offset	= st->offset;
+		n->bitstart	= st->bitstart;
+		n->bitlen	= st->bitlen;
+		st=st->next;
+	}
+	*nu=st;
+	return top;
+}
+
+##	compare stlists. ret |(typ_*)
+extern int stlneq( STnode *base, STnode *checkme )
+{
+	int ret; ret=0;
+	while ( base>0x8000 && checkme>0x8000 )
+	{
+		if ( base->name )
+			if ( checkme->name )
+				{ if ( strcmp(base->name, checkme->name) ) ret |= typ_name; }
+			else
+				ret |= typ_name;
+		else
+			if ( checkme->name ) ret |= typ_name;
+
+		if ( base->bitlen )
+			if ( checkme->bitlen )
+				{ if ( base->bitlen == checkme->bitlen ) ret |= typ_bit; }
+			else
+				ret |= typ_bit;
+		else
+			if ( checkme->bitlen ) ret |= typ_bit;
+
+		if ( base->bitlen || checkme->bitlen )
+			if ( base->bitstart==checkme->bitstart ) ret |= typ_bit;
+
+		ret |= typcmp(base->type,checkme->type,1);
+
+		base=base->next; checkme=checkme->next;
+	}
+	if ( base==Ellipsis && checkme==Ellipsis ) return ret;
+	if ( base==Ellipsis || checkme==Ellipsis ) return ret | typ_ellipsis;
+	return ret | typcmp(base,checkme,1);
+}
+

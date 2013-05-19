@@ -1,0 +1,109 @@
+C compiler:
+
+Pragmas: (Include compiler-debugging directives)
+
+    #pragma tokenshow  Shows token requests
+    #pragma tokenkill  Shows token freeing
+
+    #pragma dumptrace  Internal dumps of compiler's malloc space.
+
+    #pragma macrodef   Details macro definition. Possibly useful
+    #pragma iflines    Details #if lines.        Possibly useful
+    #pragma include    Details #include lines.   Possibly useful
+
+    #pragma trigraphs  Defaults off.
+    #pragma strongEOF  Forces constructs to be complete by the end of the file.
+    #pragma nestcomments Allows comment nesting...
+
+Tokeniser:
+
+    ## operator doesn't warn about undefined behaviour.
+    Macros are currently (wrongly) expanded if preceeded or succeeded by this.
+
+    Nonstandard \ escapes ignore the \ character. ie '\Z' == 'Z' and raise Ansi.
+
+    'TASK' returns 'T' in low, 'K' in high byte.
+
+    L'char' same as a normal char constant, wchar_t is really int.
+    L"string" as a normal string, but type is wchar_t[] (actually int[]).
+     Concatenation forces the righthand string into the lefthand type.
+
+    \x accepts any number of hex digits. Only the least significant are taken.
+    \x in a wide string defines up to 4 bytes for a wide character
+    \x in a normal string defines only one byte
+    \x in a character constant is odd, although '\x12345678' == 0x12345678
+        (eg 'T\x41424344'  == 'T432'  'TA\x41424344' == 'TA43'
+            'T\x41424344K' == 'T4K'  'T\x41424344SK' == 'T4Sk' )
+
+    '\n' translates to '^J'.  Stdio normally uses VDU: and KDB: and both
+     \r and \n are whitespace anyway. If a binary stdio is requested,
+     RAWKDB: and RAWVDU: are used.
+
+     Most programs will be WIMP, though, and WIMPio.h will provide appropriate
+     things based on the WIMP, since KBD: can only be open once.
+
+--------------------------------------------------------------------------------
+
+As ANSI should have allowed, for's initialiser will have declarations.
+
+Also allow ad-hoc functions:
+
+ if ( { for(int i=0; i<9;)
+          if (index[i++]==4) return i;
+                             return -1;} == 5 ) foobar();
+
+User-typed switches:
+
+switch : strcmp( mystring ) {   /*  strcmp( case, mystring ) */
+
+  case "foobar": /* etc */
+
+}
+
+--------------------------------------------------------------------------------
+
+#pragma [warn|ansi|alert] [on|off|'']
+
+     on  -- display this warning type hereon, subject to frontpanel.
+     off -- don't display this warning type hereon.
+     ''  -- don't display this warning type for the next line only.
+
+Should have 'pon' 'poff' and 'pop' too.
+
+#pragma doing [on|off] -- Keep/not unerrored doing messages.
+#pragma doing          -- Clear previous messages.
+
+ doing  -- placemarking info        eg during compilation of 'main'
+
+          If no error occurs, this doing is normally overwritten
+          by the next one. Otherwise, it stays in the error log.
+          It is intended to form a running commentary and/or audit trail.
+
+ warn   -- suspected logic error.   eg assignment in 'if' expression
+
+ ansi   -- non ANSI standard used.  eg sys() or multi-char char const
+
+ alert  -- recovered from error.    eg '' taken as '\0' or type coercion
+
+          Remedial action was probably correct, but this is still
+          an error needing attention. Phantom errors are possible.
+
+ error  -- Unrecoverable error.     eg unknown identifier declared int
+
+          Remedial action will allow continuation, but resulting
+          code is unlikely to be correct and phantom errors are likely.
+
+ failed -- compiler problem.        eg subblock nesting hyperextends the stack
+
+          Legal C code has caused the compiler to fail. May be an internal
+          error or, as in the example, source-based.
+          In practice, hyperextension of the stack may well be countered by
+          adding a constant to an address. This would then be converted into
+          a warning, although extreme cases would still cause a fatality.
+
+ abort  -- fatal condition.         eg no room
+
+          No remedial action possible or known. Typically due to machine
+          configuration. Some aborts may allow special action, such as
+          suspending compilation while the user tries to free some memory.
+

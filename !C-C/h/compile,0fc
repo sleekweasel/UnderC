@@ -1,0 +1,36 @@
+
+#echo compiler.h - compiles a function or non-auto variable to assembly
+
+void compilation_init();
+## Opens RAM:$.ain, settypes to BASIC, places assembly preamble,
+## initialises various variables.
+
+void compilation_end();
+##  Places symbol table (or runtime code if program is static), assembly
+##  postamble, closes RAM:$.ain
+##		Not entirely sure how to trigger assembly - perhaps just
+##		oscli the file?
+
+## The compilation code will be written in two phases:
+##  Phase 1 - write something as poor as the BASIC compiler to speed code
+##				development.
+##  Phase 2 - write something better and fuller.
+
+void compile_func( IDnode *id, Cnode *func, Tnode *type );
+## Compiles the given function.
+##		In phase 2, if more than three simple assignments initialise a
+##		block, create a memory dump of the values and memcpy it to the stack.
+##		Can block-static variables have function-initialisers?
+##			eg { static char* a=malloc(30); }
+
+void compile_identifier( IDnode* );
+## Places identifier in the file, if it defines space. If it also has an
+## initialiser..
+##	Phase 1 - initialiser will be in IDNode's initialiser field.
+##		If it's a simple value, it will just be placed.
+##		If it's an array initialiser, it must be a flat initialiser, probably
+##		in an Expression tree with commas.
+##		No initialiser may be an `address-of' operator.
+##	Phase 2 - initialiser will be in IDnode's initialiser field, but
+##		support for complex initialisations will be provided.
+

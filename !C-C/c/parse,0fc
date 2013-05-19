@@ -1,0 +1,759 @@
+
+#echo Parse.c  -- Main compiler routine. (Parses function blocks and sets ids.)
+##
+##   Reads declarators and definitions.
+##    When an external 'outside-function' (not necessarily 'extern') object
+##    has been read, the compilation routines are called or the initialisation
+##    placed to write the .o file (or an executable).
+##
+##   On eof and channel=0, the linkage table pointer is written at the start
+##    of the file, then the linkage table is written.
+##   (Unless no extern declarations have been made, when the file is made a
+##     standalone executable, run from the final function, and parse returns 1)
+##
+## For quitting, token.h just sends <eof> indefinitely until parse finishes.
+
+#pragma doing off
+
+#include "malloc.h"
+#include "tree.h"
+#include "tokens.h"
+#include "strings.h"
+#include "error.h"
+#include "expr.h"
+#include "types.h"
+#include "struct.h"
+#include "parse.h"
+#include "prepr.h"
+#include "compile.h"
+
+#pragma doing @@:DET@@:
+
+extern int dumptrace_flag=0;
+
+extern int sys_flag=1;
+
+extern int CNODE='CNOD';
+extern int IDNODE='IDND';
+
+extern IDnode	*id_globals=0,	/* objects, functions, typedefs, enum consts */
+				*id_locals=0,	/* Local version. */
+				*st_globals=0,	/* struct, union, enum names */
+				*st_locals=0;	/* Local version. */
+
+##------------------------------------------------------------------------
+## Type and struct printing.
+
+void print_id( IDnode *id )
+{
+	if ( id->ty.is==(Enum | Const_Q) )
+		printf("%t %Y '%s'==%d\n",
+			id->ty.is,id->ty.type,id->id.name,id->ty.value);
+	else
+	if ( id->ty.is )
+		printf("%t %Y '%s'\n",id->ty.is,id->ty.type,id->id.name);
+	;
+}
+
+void print_st( IDnode *id )
+{
+##	printf("..%d\n",id);
+	if ( id->ty.is )
+	{
+		if ( id->id.name )
+			printf("%t {%L}:%d '%s'\n",
+				id->ty.is,id->ty.type,id->size,id->id.name);
+		else
+			printf("%t {%L}:%d '0x%x'\n",
+				id->ty.is,id->ty.type,id->size,id);
+	}
+}
+
+void print_trees( IDnode *idt, IDnode *stt ) {
+	printf("Id-tree %x\n",idt);
+		if ( idt ) iterate_ordered(idt,&print_id);
+	printf("St-tree %x\n",stt);
+		if ( stt ) iterate_ordered(stt,&print_st);
+	printf("<done> %d\n",realloc(0,0));
+}
+
+##------------------------------------------------------------------------
+## Type and struct freeing
+
+void free_id_data(IDnode *id)
+{
+	typfree(id->ty.type); id->ty.type=0;
+}
+
+void free_st_data(IDnode *id)
+{
+	int i; i=id->ty.is;
+	if ( i==Struct || i==Union )
+		{ stlfree(id->ty.type); id->ty.type=0; }
+}
+
+void free_trees(IDnode *idt, IDnode* stt) {
+	int i; i = ( idt==id_globals ) && ( stt==st_globals );
+	iterate(idt,&free_id_data);	/* Free id typemods */
+if (i) printf("<free-mods> %d\n",realloc(0,0));
+	iterate(stt,&free_st_data);	/* Free struct specifiers */
+if (i) printf("<free-stdata> %d\n",realloc(0,0));
+	iterate(idt,0);				/* Free id name-placeholders */
+if (i) printf("<free-id> %d\n",realloc(0,0));
+	iterate(stt,0);				/* Free st name-placeholders */
+if (i) printf("<free-st> %d\n",realloc(0,0));
+}
+
+## id/st trees:
+##
+## global tree is externally linking identifiers, but block-local external
+##  linkage is marked inactive at the end of that block during block-local
+##  tree destruction.
+## Next tree is file-local linkage, non-external.
+## Subsequent trees are block-local.
+
+extern Tnode *ID2T(IDnode *id) {
+	char *p;
+	if ( p=id ) return p+sizeof(Bnode);
+	return 0;
+}
+extern IDnode *T2ID(Tnode *t ) {
+	char *p;
+	if ( p=t ) return p-sizeof(Bnode);
+	return 0;
+}
+
+## Cnode->is  holds the keyword of the statement:
+##
+## For, While, Do, If, Switch, Case, Default, Return, Break, Continue, Goto
+##
+## 'specials' are:
+##
+##    Else       -- if (1) 2 else 3 (as opposed to 'if (1) 2')
+##    OpenCurly  -- block. 1={}. 2=new_idtree. 3=new_sttree.
+##    Semicolon  -- expression 1; next
+##    Ident      -- 'goto'-label 1: 2; next
+##
+##  Tnode ->is and ->value for an id_tree root are maintained as
+##    is==0 and value==bytelength of data (including function defs)
+##
+##-------------------------------------
+
+static void declaration( IDnode *id_tree, IDnode *st_tree, int mode);
+static Cnode *read_block( IDnode *id_tree, IDnode *st_tree, int mode, IDnode *id );
+
+Cnode *statement() {
+	Cnode *nu; nu=malloc(sizeof(Cnode));
+	Token *see, *si; see=seetoken();
+	int is; is=see->is;
+	nu->is=is; nu->next=0 /*NULL*/;
+
+	error(Doing,"S:Statement starts %T",see);
+
+	if ( istype(0) ) {	/* Reads `next' token - same as see. */
+## type-declaration
+##	 (treat as expression, for initialiser, unless an array initialiser...)
+
+## Note, Permitting declarations after statements is non-ANSI, but is
+##	firstly necessary to permit this code to compile itself, and secondly
+##	would require extra flags to detect.
+## Note too that for (;;) int a=4; is legal under this scheme.
+
+		nu->is=SemiColon; nu->first=0 /*NULL*/;	/* Expressions are harmless */
+		declaration(id_locals, st_locals, Auto);
+
+	} else
+	if ( is == For ) {
+## For			for ( 1 ; 2 ; 3 ) 4
+		eatatoken(is,"!No for?");
+		eatatoken(OpenBracket,"Wanted ( after for");
+		nu->first	= (Cnode *) parseexpr(0, SemiColon);
+		eatatoken(SemiColon,"Missing first semicolon in for");
+		nu->second	= (Cnode *) parseexpr(1, SemiColon);
+		eatatoken(SemiColon,"Missing second semicolon in for");
+		nu->third	= (Cnode *) parseexpr(0, SemiColon);
+		eatatoken(CloseBracket,"Wanted ) after for's expressions");
+		error(Doing,"S: for ( %E ; %E ; %E )",nu->first,nu->second,nu->third);
+		nu->fourth	= statement();
+	} else
+	if ( is == While ) {
+## While		while 1 2
+		eatatoken(is,"!No while?");
+		eatatoken(OpenBracket,"Wanted ( after while");
+		nu->first	= (Cnode *) parseexpr(1, SemiColon);
+		eatatoken(CloseBracket,"Wanted ) after while's condition");
+		error(Doing,"S: while ( %E )",nu->first);
+		nu->second	= statement();
+	} else
+	if ( is == Do ) {
+## Do			do 1 while 2
+		eatatoken(is,"!No do?");
+		nu->first	= statement();
+		eatatoken(is=While,"Expected a while to follow the do");
+		eatatoken(OpenBracket,"Wanted ( after do..while");
+		nu->second	= (Cnode *) parseexpr(1, SemiColon);
+		eatatoken(CloseBracket,"Wanted ) after do..while's condition");
+		error(Doing,"S: do { } ( %E )",nu->second);
+	} else
+	if ( is == If ) {
+## If			if (1) 2
+## Else			if (1) 2 else 3 (as opposed to 'if (1) 2')
+		eatatoken(is,"!No if?");
+		eatatoken(OpenBracket,"Wanted ( after if");
+		nu->first	= (Cnode *) parseexpr(1, SemiColon);
+		eatatoken(CloseBracket,"Wanted ) after if's condition");
+		nu->second	= statement();
+		see=seetoken(); is=see->is;
+		error(Doing,"S: if ( %E ) { %x }",nu->first,nu->second);
+		if ( is == Else ) {
+			eatatoken(is,"!No else?");
+			error(Doing,"S: else { }");
+			nu->is=Else;
+			nu->third	= statement();
+		}
+	} else
+	if ( is == Switch ) {
+## Switch		switch (1) 2
+		eatatoken(is,"!No switch?");
+		eatatoken(OpenBracket,"Wanted ( after switch");
+		nu->first	= (Cnode *) parseexpr(1, SemiColon);
+		eatatoken(CloseBracket,"Wanted ) after switch's reason");
+		error(Doing,"S: switch ( %E )",nu->first);
+		nu->second	= statement();
+	} else
+	if ( is == Case ) {
+## Case			case 1 : next		(Only within switch)
+		eatatoken(is,"!No case?");
+		nu->first	= (Cnode *) constant_expression("Case statement");
+		eatatoken(Colon,"Wanted : after case's reason");
+		error(Doing,"S: case %E",nu->first);
+	} else
+	if ( is == Default ) {
+## Default		default			(Only within switch)
+		eatatoken(is,"!No default?");
+		error(Doing,"S: default");
+	} else
+	if ( is == Return ) {
+## Return		return (1)
+		eatatoken(is,"!No return?");
+		nu->first=(Cnode *) parseexpr(1, SemiColon);
+		eatatoken(SemiColon,"Missing ; after return");
+		error(Doing,"S: return %E",nu->first);
+	} else
+	if ( is == Break ) {
+## Break		break			(Only within for, while, do, switch)
+		eatatoken(is,"!No break?");
+		eatatoken(SemiColon,"Missing ; after break");
+		error(Doing,"S: break");
+	} else
+	if ( is == Continue ) {
+## Continue		continue		(Only within for, while, do)
+		eatatoken(is,"!No continue?");
+		eatatoken(SemiColon,"Missing ; after continue");
+		error(Doing,"S: continue");
+	} else
+	if ( is == Goto ) {
+## Goto			goto 1
+		eatatoken(is,"!No goto?");
+		see=seetoken();
+		if ( see->is == Ident ) nu->first=strdup(see->data);
+		eatatoken(is,"Expected identifier after goto");
+		error(Doing,"S: goto %s",nu->first);
+	} else
+	if ( is == Else ) {
+		eatatoken(is,"!No else?");
+		error(Error,"Misplaced Else. Check brackets around Ifs");
+		free(nu); nu=0;
+	} else
+	if ( is == OpenCurly ) {
+## OpenCurly	{ 1 } 2=new_idtree 3=new_sttree.
+		error(Doing,"S: OpenCurly (start block)");
+		free(nu);
+		nu=read_block(id_locals, st_locals, Static, 0);
+		error(Doing,"S: OpenCurly (end block)");
+	} else
+	if ( is == SemiColon ) {	/* Noop */
+## Semicolon	expression 1; next
+		nu->first=0;
+		eatatoken(SemiColon,"!No semicolon?");
+		error(Doing,"S: SemiColon (noop)");
+	} else
+	if ( is == Ident && si=peektoken(1) && si->is == Colon ) {
+## Ident		'goto'-label 1: next;
+		nu->first=(Cnode *) strdup(see->data);
+		eatatoken(is,"Expected identifier before :");
+		eatatoken(Colon,"Expected : after goto-label (%s)",nu->first);
+		error(Doing,"S: Goto label %s :",nu->first);
+	} else
+	if ( sys_flag && is == Ident && !strcmp(see->data,"sys") ) {
+		eatatoken(is,"!No sys?");
+		eatatoken(OpenBracket,"Was hoping for a ( after sys");
+		nu->is==Sys;
+		nu->first=(Cnode*) parseexpr(0,Comma); /* Name/ident */
+		see=seetoken();
+		if ( see->is==Comma ) {
+			eatatoken(Comma,"Lost first comma in sys!");
+			see=seetoken();
+			if ( see->is != Comma ) {
+				nu->second=(Cnode*) parseexpr(0,Comma); /* `in' exprs */
+				see=seetoken();
+			} else
+				nu->second=0 /* NULL */;  /* no `in' exprs */
+		}
+		if ( see->is==Comma ) {
+			eatatoken(Comma,"Lost second comma in sys!");
+			see=seetoken();
+			if ( see->is != Comma ) {
+				nu->third=(Cnode*) parseexpr(0,Comma); /* `out' exprs */
+				see=seetoken();
+			} else
+				nu->third=0 /* NULL */;  /* no `out' exprs */
+		}
+		if ( see->is==Comma ) {
+			eatatoken(Comma,"Lost third comma in sys!");
+			see=seetoken();
+			if ( see->is != Comma ) {
+				nu->fourth=(Cnode*) parseexpr(0,Comma); /* `in' exprs */
+				see=seetoken();
+			} else
+				nu->fourth=0 /* NULL */;  /* no `in' exprs */
+		}
+		eatatoken(CloseBracket,"Missing ) in sys command");
+		eatatoken(SemiColon,"Missing ; after sys command");  
+	} else
+	{
+		nu->is=SemiColon;
+		nu->first=(Cnode *) parseexpr(0, SemiColon);
+		eatatoken(SemiColon,"Missing ; after %E",nu->first);
+		error(Doing,"S: Expression %E",nu->first);
+	}
+	return nu;
+}
+
+## Parse (function) block. id=this-function-decl: only used for mode=Extern
+
+static Cnode *read_block( IDnode *id_tree, IDnode *st_tree, int mode, IDnode *id )
+{
+	Cnode *ret, **stmt;
+	Token *see;
+
+	ret=malloc(sizeof(Cnode)); ret->is=OpenCurly;
+	stmt		= &ret->first;
+	ret->second	= (Cnode *) (id_locals = makeheader(sizeof(IDnode),IDNODE)); /* idtree */
+	ret->third	= (Cnode *) (st_locals = makeheader(sizeof(IDnode),IDNODE)); /* sttree */
+	ret->next   = 0 /*NULL*/;
+
+	id_locals->ty.is=0; id_locals->ty.value=0; id_locals->ty.type=0;
+	id_locals->offset=0; id_locals->size=0;
+
+	st_locals->ty.is=0; st_locals->ty.value=0; st_locals->ty.type=0;
+	st_locals->offset=0; st_locals->size=0;
+
+
+	id_locals->id.left=id_tree; st_locals->id.left=st_tree;
+
+	error(Doing,"S:read_block(); mode=%t",mode);
+
+	if ( mode == Extern )		/* To set up id_tree from id->ty.value */
+	{							/* ie to include function parameters   */
+		STnode *st; st=id->ty.value;
+
+		st=id->ty.type->value;  /* XXX CHECK THIS..  */
+
+		error(Doing,"S:read_block(); inserting parameters:%x:%L",st,st);
+		while ( st>0x8000 )
+		{
+			IDnode *id; id=seekadd(st->name,id_locals,sizeof(IDnode),IDNODE);
+			id->ty.type=typdup(st->type);
+			id->ty.is=Ident;
+			id->ty.value=0;
+				/* This should probably indicate the parameter's position
+					in the stack. Not quite clear how initialisers are to be
+					dealt with.
+				*/
+			st=st->next;
+		}
+	}
+
+	eatatoken(OpenCurly,"parse:read_block() was called without an opencurly?");
+
+	/* Block repeatedly reads statements. Statements are built in statement() */
+
+	error(Doing,"S:read_block; start block definition");
+
+	while ( see=seetoken(), see->is != CloseCurly ) {
+		Cnode *nu; nu=statement( );
+		if ( nu ) { *stmt=nu; stmt=&nu->next; }
+	}
+
+	eatatoken(CloseCurly,"parse:read_block() was ended without an closecurly?");
+
+	error(Doing,"S:read_block; end block definition");
+
+	*stmt=0;
+
+	/* Restore local values before exit from block */
+	id_locals=id_tree; st_locals=st_tree;
+
+	return ret;
+}
+
+##void print_block(Cnode *f,int d) {
+##	while ( f ) {
+##		int is; is=f->is;
+##		error(Doing,"S:print_block: %x = %t %x %x %x %x %x",
+##			f,f->is,f->first,f->second,f->third,f->fourth,f->next);
+##		if ( is==OpenCurly ) {
+####				{ 1 } 2=new_idtree 3=new_sttree
+##			IDnode *idt, *stt; idt=(IDnode*)f->second; stt=(IDnode*)f->third;
+##			printf("% {\n",d);
+##			printf("% /* -- -- -- -- -- -- -- --\n",d);
+##			print_trees( idt->id.right, stt->id.right );
+##			printf("% -- -- -- -- -- -- -- -- */\n",d);
+##			print_block(f->first,d+1);
+##			printf("% }\n",d);
+##		} else
+##		if ( is==For ) {
+####				for ( 1 ; 2 ; 3 ) 4
+##			printf("% for ( %e ; %e ; %e )\n",d,f->first,f->second,f->third);
+##			print_block(f->fourth,d+1);
+##		} else
+##		if ( is==While ) {
+####				while (1) 2
+##			printf("% while ( %e )\n",d,f->first);
+##			print_block(f->second,d+1);
+##		} else
+##		if ( is==Do ) {
+####				do (1) while 2
+##			printf("% do\n",d);
+##			print_block(f->first,d+1);
+##			printf("% while ( %e );\n",d,f->second);
+##		} else
+##		if ( is==If ) {
+####				if (1) 2
+##			printf("% if ( %e )\n",d,f->first);
+##			print_block(f->second,d+1);
+##		} else
+##		if ( is==Else ) {
+####				if (1) 2 else 3
+##			printf("% if ( %e )\n",d,f->first);
+##			print_block(f->second,d+1);
+##			printf("% else\n",d);
+##			print_block(f->third,d+1);
+##		} else
+##		if ( is==Switch ) {
+####				switch (1) 2
+##			printf("% switch ( %e )\n",d,f->first);
+##			print_block(f->second,d+1);
+##		} else
+##		if ( is==Case ) {
+####				case 1=%E
+##			printf("% case %e:\n",d,f->first);
+##		} else
+##		if ( is==Default ) {
+####				default
+##			printf("% default:\n",d);
+##		} else
+##		if ( is==Return ) {
+####				return 1=%E (or NULL)
+##			printf("% return %e;\n",d,f->first);
+##		} else
+##		if ( is==Break ) {
+####				break
+##			printf("% break;\n",d);
+##		} else
+##		if ( is==Continue ) {
+####				continue
+##			printf("% continue;\n",d);
+##		} else
+##		if ( is==Goto ) {
+####				goto 1
+##			printf("% goto %s;\n",d,f->first);
+##		} else
+##		if ( is==Ident ) {
+####				1: 1=%s (goto-label)
+##			printf("% %s: /* Goto label */\n",d,f->first);
+##		} else
+##		if ( is==SemiColon ) {
+####				1=%E
+##			printf("% %e;\n",d,f->first);
+##		} else
+##		{
+##			error(Failed,"Uncouth Cnode: %x -> is = %t",f,is);
+##		}
+##		f=f->next;
+##	}
+##}
+
+##void was_compile_func( IDnode *id, Cnode *func, Tnode *type )
+##{
+##	printf("----------------------------- Definition of %s\n",id->id.name);
+##	printf("%y %s\n%y %s\n- - - - - - - - - - - - - - -\n",
+##		id->ty.type,id->id.name,type,id->id.name);
+##	print_block(func,0);
+##	printf("----------------------------- End %s\n",id->id.name);
+##}
+
+void free_block(Cnode *f) {
+	while ( f ) {
+		int is; is=f->is;
+		Cnode *next; next=f->next;
+		error(Doing,"S:free_block: %x = %t %x %x %x %x %x",
+			f,f->is,f->first,f->second,f->third,f->fourth,f->next);
+		if ( is==OpenCurly ) {
+##				{ 1 } 2=new_idtree 3=new_sttree
+			IDnode *idt, *stt; idt=f->second; stt=f->third;
+			free_trees( idt->id.right, stt->id.right );
+			free_block(f->first);
+		} else
+		if ( is==For ) {
+##				for ( 1 ; 2 ; 3 ) 4
+			freeexpr(f->first);
+			freeexpr(f->second);
+			freeexpr(f->third);
+			free_block(f->fourth);
+		} else
+		if ( is==While ) {
+##				while (1) 2
+			freeexpr(f->first);
+			free_block(f->second);
+		} else
+		if ( is==Do ) {
+##				do (1) while 2
+			free_block(f->first);
+			freeexpr(f->second);
+		} else
+		if ( is==If ) {
+##				if (1) 2
+			freeexpr(f->first);
+			free_block(f->second);
+		} else
+		if ( is==Else ) {
+##				if (1) 2 else 3
+			freeexpr(f->first);
+			free_block(f->second);
+			free_block(f->third);
+		} else
+		if ( is==Switch ) {
+##				switch (1) 2
+			freeexpr(f->first);
+			free_block(f->second);
+		} else
+		if ( is==Case ) {
+##				case 1=%E
+			freeexpr(f->first);
+		} else
+##		if ( is==Default ) {
+##				default
+##		} else
+##		if ( is==Break ) {
+##				break
+##		} else
+##		if ( is==Continue ) {
+##				continue
+##		} else
+		if ( is==Goto || is==Ident ) {
+##				goto 1
+##				1: 1=%s (goto-label)
+			free(f->first);
+		} else
+		if ( is==SemiColon || is==Return ) {
+##				1=%E
+##				return 1=%E (or NULL)
+			freeexpr(f->first);
+		} else
+		{
+			error(Failed,"Uncouth Cnode: %x -> is = %t",f,is);
+		}
+		free(f);
+		f=next;
+	}
+}
+
+void free_func( Cnode *func, Tnode *type )
+{
+	error(Doing,"S:free_func(%x,%x)",func,type);
+	free_block(func);
+	error(Doing,"S:end free_func(%x,%x)",func,type);
+}
+
+##-------------------------------------
+
+char valid[]={
+	Void,Int,Char,Long,Short,
+	Const,Volatile,Signed,Unsigned,
+	Float,Double,Ident,Struct,Union,Enum,
+	Extern,Auto,Register,Static,Typedef,
+	eof,
+	0};
+
+## mode here is the default if no storage specifier given: Extern or Auto
+
+## Oh, this should check duplicate declarations rather than
+## whingeing about them. It should whinge about redefinitions, though.
+
+static void declaration( IDnode *id_tree, IDnode *st_tree, int mode)
+{
+	Tnode *basetype;
+	Token *see;
+	int decls, defd_ct, func_defd;
+
+	error(Doing,"D:Declaration, Global/Function scope = %t",mode);
+	decls=(mode==Extern)?0xE000:0xF000; /* Global or Auto */
+	basetype=decl_specs( &decls );
+	see=seetoken(); defd_ct=0; func_defd=0;
+	error(Doing,"D:Decl_spec %Y %Y", decls,basetype);
+	if ( see && see->is!=SemiColon )
+	{
+	  if ( !decls ) decls=mode;
+	  do
+	  {
+		IDnode *id;
+		char *ident;
+		Tnode *type;
+		error(Doing,"D:Declarator based on %Y",basetype);
+		type=declarator( &ident, basetype ); defd_ct++;
+		error(Doing,"D:Declarator.. %s is a %Y",ident,type);
+
+		if ( id=seekfind(ident,id_tree) )
+		{
+			char* idnt; idnt=malloc(strlen(ident)+2);
+			strcpy(idnt,"`"); strcat(idnt,ident);
+			error(Doing,"D:'%s' de%sed. I should compare types",
+				ident,id->offset?"fin":"clar");
+			id=seekadd(idnt,id_tree,sizeof(IDnode),IDNODE);
+			id->offset=0;
+			free(idnt);
+		}
+		else
+		{
+			error(Doing,"D:Adding %s as a %Y",ident,type);
+			id=seekadd(ident,id_tree,sizeof(IDnode),IDNODE);
+			id->offset=0;
+		}
+		id->ty.type=type; id->ty.is=decls;
+		id->ty.value=0; id->size=typsize(type); id->offset=0;
+
+		see=seetoken();
+		error(Doing,"D:After decl of %s, found %T",ident,see);
+		if ( see->is==OpenCurly && type->is==Function &&
+			mode==Extern && defd_ct==1 )
+		{
+			Cnode *func;
+			error(Doing,"D:Function definition");
+			if ( id->offset )
+				error(Error,"Function '%s' already defined",ident);
+			func=read_block(id_tree,st_tree,mode,id);
+			error(Doing,"D:Function defined");
+			compile_func(id,func,type);
+			free_func(func,type);
+			see=seetoken(); func_defd=id->offset=1;
+		}
+		else if ( see->is==Assign ) {
+			eatatoken(Assign, "How did I get here without Assign?");
+			see=seetoken();
+			if ( id->offset ) {
+				error(Error,"Identifier '%s' already initialised",ident);
+			}
+			error(Doing,"S:Initialisation for '%s'",ident);
+			if ( see->is == OpenCurly )
+				error(Failed,"Block initialiser not yet written");
+			id->offset=parseexpr(2,Comma);
+			error(Doing,"S:Init '%s' := %E",ident,id->offset);
+			see=seetoken();
+		}
+		if ( *ident ) free(ident);
+	  }
+	  while ( !func_defd && see->is!=SemiColon && 
+			eatatoken(Comma,"Expected a comma after declaration (%T)",
+						(seetoken()) )
+			);
+	}
+
+	if ( !func_defd &&
+			!eatatoken(SemiColon,"Ah'm a-hungerin' foah uh semi-colon...(%T)",
+						(seetoken())) )
+	{
+		for ( see=seetoken(); !strchr(&valid,see->is); see=taketoken() )
+			error(Alert,"Eaten misplaced token '%T'",see);
+	}
+
+}
+
+extern int parse() { /* Parse and compile opened token stream into 'outfile' */
+
+	char *cname;
+
+	id_locals=id_globals=makeheader(sizeof(IDnode),IDNODE);
+	st_locals=st_globals=makeheader(sizeof(IDnode),IDNODE);
+
+	id_globals->ty.is=0; id_globals->ty.value=0; id_globals->ty.type=0;
+	id_globals->offset=0; id_globals->size=0;
+
+	st_globals->ty.is=0; st_globals->ty.value=0; st_globals->ty.type=0;
+	st_globals->offset=0; st_globals->size=0;
+
+	{
+		IDnode *id;
+		id=seekadd("char",id_globals,sizeof(IDnode),IDNODE);
+		id->ty.type=Char;
+		id->ty.is=Typedef;
+		id->ty.value=0;
+		id=seekadd("int",id_globals,sizeof(IDnode),IDNODE);
+		id->ty.type=Int;
+		id->ty.is=Typedef;
+		id->ty.value=0;
+		id=seekadd("-string",id_globals,sizeof(IDnode),IDNODE);
+		id->ty.type=new_tnode();
+		id->ty.type->is=Star;
+		id->ty.type->type=Char | Const_Q;
+		id->ty.is=Typedef;
+		id->ty.value=0;
+	}
+
+
+##	printf("Hack %x\n",0);
+
+	cname=strdup("\"Compiler:textfile\"");
+	do_include(cname,cname);
+
+	do {
+		error(Doing,"D:Declaration");
+		declaration(id_globals, st_globals, Extern);
+
+		error(Doing,"S:Ditching excess tokens, apparently");
+		{
+			Token *see;
+			for ( see=seetoken(); see->is==eof && channel; see=taketoken() )
+				error(Doing,"S:Encountered %T", see);
+		}
+		error(Doing,"S:Finished ditching tokens");
+
+		{
+			int press;
+			sys("OS_Mouse",,(,,press));
+			if ( press ) { sys("OS_Find",(0,channel)); channel=0; }
+		}
+	} while ( channel );
+
+	print_trees(id_globals, st_globals);
+
+##	make_table(); /* Make symbol table. Currently C-- style */
+
+	free_trees(id_globals, st_globals);
+
+}
+
+extern int main ()
+{
+	int len; char *ch, *rea;
+	printf("<start-mem> %d\n",rea=realloc(0,0));
+	if ( ch=malloc(len=(malloc(0)-4)) ) {
+		memset(ch,0xAF,len); free(ch);
+	}
+	printf("<block> %d\n",len);
+##	printf("Hack %x\n",0);
+	parse();
+	printf("<end-mem> %d\n",realloc(0,0));
+	printf("<loss> %d\n",rea-realloc(0,0));
+}

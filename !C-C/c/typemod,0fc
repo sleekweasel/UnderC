@@ -1,0 +1,421 @@
+
+##---------------------------------------------------------------------------
+## Type modifiers.. like * [] () etc
+
+#echo typemod.c
+
+#include "malloc.h"
+#include "strings.h"
+#include "tree.h"
+#include "error.h"
+#include "expr.h"
+#include "tokens.h"
+#include "types.h"
+#include "struct.h"
+#include "parse.h"   /* The real source of {id|st}_{global|local} */
+
+#echo typemod.c
+
+##---------------------------------------------------------------------------
+extern int TNODE='TNOD';
+extern Tnode *new_tnode() {
+	Tnode *nu; nu=malloc(sizeof(Tnode)); /* Only direct allocation */
+	nu->MAGIC=TNODE;
+	return nu;
+}
+extern int free_tnode( Tnode *kill ) {
+	if ( !kill )
+		return error(Failed,"free_tnode was given NULL");
+	if ( kill->MAGIC != TNODE )
+		return error(Failed,"free_tnode was given !TNODE");
+	free(kill);
+}
+##---------------------------------------------------------------------------
+
+##
+##	<declarator>:	<< * <type-qual-list> >>*opt <direct-declarator>
+##	<direct-decl>:	<identifier>
+##					( <declarator> )
+##					<direct-decl> [ <const-expression>opt ]
+##					<direct-decl> ( <param-list> << , ... >>opt )
+##
+##	Parse a declarator onto basetype. If identifier is wanted, take an extant,
+##	otherwise complain if one appears.
+##
+##	Old-style functions are not supported. () is a warning, taken as ( void )
+##
+##	Array sizes are either initialiser-determined or simple IntConst intially
+##
+
+static Tnode *int_declarator( char **identifier, Tnode **botnode );
+
+static STnode *newfunctiondecl();		/* Don't eat final ) */
+
+## direct_decl: Id, ( <declarator> ), dir_dec[constant], dir_dec(params)
+
+static Tnode *direct_decl( char **identifier, Tnode **botnode ) {
+	Token *see;
+	Tnode *result, *bot;
+	see=seetoken(); result=0; bot=0;
+
+	if ( see->is==Ident						/* If identifier, and... */
+		&& identifier && !*identifier )		/* ...not ADT and no ID yet */
+	{
+error(Doing,"B:DirectDecl, ident is %T",see);
+		*identifier=see->data; see->data=0;
+		see=taketoken();
+	}
+    else
+	if ( see->is==OpenBracket )
+	{
+error(Doing,"B:DirectDecl, Open bracket.. id=%x",identifier);
+		if ( !identifier || !*identifier )		/* if ADT or no Ident yet */
+		{
+##
+##	!**identifier  => can have ( <declarator> )
+##	Yet no id also => cannot have ( <id-list> )  [OldFn], and so...
+##	... OK tokens for ( <declarator> ) are * [ ( and Ident if ident!=typedef
+##	No typedef-identifier can be a formal parameter [OldFn]
+##
+			int this;
+			see=taketoken();
+			this=see->is;
+			if ( this==Times || this==OpenBracket || this==OpenArray ||
+			   ( this==Ident && identifier && !is_typedef(see->data) )
+			)
+			{
+				result=int_declarator(identifier, &bot);
+				eatatoken(CloseBracket,"Missing ')' after declarator.");
+				see=seetoken();
+			}
+		}
+	}
+
+	do {
+		if ( !see )		see=seetoken();
+		if ( see->is==OpenBracket )			/* Function declaration */
+		{
+			Tnode *nu; Token *peek;
+			see=taketoken();
+
+			nu=new_tnode();
+			nu->is=Function; nu->type=0; nu->value=Ellipsis; /* Default=(...) */
+
+			if ( !bot )	result=bot=nu;
+				else	bot->type=nu, bot=nu;
+
+			if ( see->is==CloseBracket )
+				error(Warn,"Empty function specifier taken ( ... )");
+			else
+			if ( see->is==Void && (peek=peektoken(1), peek)->is==CloseBracket )
+			{
+				see=taketoken(); /* Eat void, leave ) for later */
+				nu->value=Void;
+			}
+			else
+			if ( istype(0) || see->is==Register )
+			{
+				nu->value=newfunctiondecl();	/* Could be def'n or decl */
+##	newfunctiondecl() returns a STnode paramlist, term'd with uneaten )
+			}
+			else
+				error(Warn,"I don't like this function declaration");
+			eatatoken(CloseBracket,"Expected ')' after function declaration");
+			see=0;
+		}
+		else
+		if ( see->is==OpenArray )		/* Array declaration */
+		{
+			Tnode *nu;
+			nu=new_tnode();
+			nu->is=OpenArray; nu->value=0; nu->type=0;
+			if ( !bot )	result=bot=nu;
+				else	bot->type=nu, bot=nu;
+			see=taketoken();
+			if ( see->is!=CloseArray )
+			{
+				nu->value=constant_expression("array size");
+				if ( nu->value==0 ) error(Alert,"Array [0] should be []");
+			}
+			else
+				nu->value=0;
+			eatatoken(CloseArray,"Expected ']' after constant expression.");
+			see=0;
+		}
+	} while ( !see ); /* Token used? Try another */
+	*botnode=bot;
+	return result;
+}
+
+##	<declarator>:	<< * <type-qual-list> >>*opt <direct-declarator>
+
+static Tnode *int_declarator( char **identifier, Tnode **botnode )
+{
+	Token *see;
+	Tnode *result, *bot;
+	see=seetoken(); result=0; bot=0;
+	if ( see->is==Times )	/* << * <type-qual-list> >>*opt */
+	{
+		error(Doing,"B:declarator start");
+		while ( see->is==Times || see->is==Const || see->is==Volatile )
+		{
+			if ( see->is==Times ) /* This always executed first for this loop */
+			{
+				Tnode *nu; nu=new_tnode();
+				nu->is=Star; nu->type=result;
+				error(Doing,"B:declarator... *  %x",nu);
+				if ( !bot ) bot=nu;
+				result=nu;
+				see=taketoken();
+			}
+			if ( see->is==Const )
+			{
+				error(Doing,"B:declarator... %t",see->is);
+				if ( result->is & Const_Q )
+					error(Error,"Ignoring extra 'const'");
+				else
+					result->is |= Const_Q;
+				see=taketoken();
+			}
+			if ( see->is==Volatile )
+			{
+				error(Doing,"B:declarator... %t",see->is);
+				if ( result->is & Volatile_Q )
+					error(Error,"Ignoring extra 'volatile'");
+				else
+					result->is |= Volatile_Q;
+				see=taketoken();
+			}
+		}
+	}
+
+	if ( see->is==Ident || see->is==OpenArray || see->is==OpenBracket )
+	{
+		Tnode *direct;
+		error(Doing,"B:direct decl for %t",see->is);
+		direct=direct_decl(identifier, botnode);
+		error(Doing,"B:direct decl 0x%x",direct);
+		if ( direct ) (*botnode)->type=result, result=direct;
+	}
+	if ( bot ) *botnode=bot;
+	return result;
+}
+
+## Returns type list. Identifier set if exists, basenode is linked in.
+
+extern Tnode *declarator( char **identifier, Tnode *basetype ) {
+	Tnode *top, *bot; bot=0; *identifier=0;
+	top=int_declarator( identifier, &bot);
+	if ( !top )			/* If no modifiers.. */
+		top=basetype;	/* ..just return basetype */
+	else
+		bot->type=basetype;	/* Otherwise link basetype into modifier-list */
+	error(Doing,"B:Top=0x%x  Bot=0x%x",top,bot);
+	if ( top>0x8000 ) error(Doing,"B:Top->is=%d %t",top->is,top->is);
+	return top;
+}
+
+
+extern Tnode *typename( void ) {
+##		Returns type for typecast or sizeof().
+##			<typename>
+##				 <specifier-qualifier-list> <abstract-declarator>opt
+	Tnode *ret;
+	error(Doing,"B:typename - to spec_qual()");
+	ret=spec_qual();
+	error(Doing,"B:typename - spec_qual()=%Y",ret);
+	ret=declarator(0,ret);
+	error(Doing,"B:typename - declarator()=%Y",ret);
+	return ret;
+}
+
+
+extern int typsize ( Tnode *tn ) {
+	int size, is; size=1;
+	while ( tn>0x8000 )
+	{
+	    is=tn->is & FlagsAfter;
+		if ( is==Star )				return size*4;
+		if ( is==OpenArray )		size*=tn->value;
+		if ( is==Function )			return 0;			/* illegal */
+		if ( is==Enum )				return size*4;		/* Enum is int */
+		if ( is==Struct || is==Union )
+			{ IDnode *id; id=T2ID(tn); return size*id->size; }
+		tn=tn->type;
+	}
+	is=tn & FlagsAfter;		/* Mask off storage specifiers */
+	if ( is==CharFloat )		return size*12;
+	if ( is==LongDouble )		return size*12;
+	if ( is==Double )			return size*8;
+	if ( is==Float )			return size*4;
+	if ( is==Int || is==Long )	return size*4;
+	if ( is==Short )			return size*2;	/* Short: worth supporting? */
+	if ( is==Char )				return size;
+	return 0;
+}
+
+static STnode *newfunctiondecl()		/* Don't eat final ) */
+{
+	char *ident;
+	int decls, offset;
+	Token *see;
+	Tnode *type;
+	STnode *top, *p, **bot;
+	top=0; bot=&top; offset=0;
+	do
+	{
+		decls=0;
+		see=seetoken();
+		if ( see->is==Ellipsis )
+		{
+			taketoken();
+			*bot=Ellipsis;
+			return top;
+		}
+		else
+		{
+			type=decl_specs(&decls);
+			type=declarator(&ident,type);
+			p=new_stnode();
+			*bot=p; bot=&p->next; p->next=0;
+			p->name=ident; p->type=type; p->offset=offset;
+			p->bitlen=0; p->bitstart=0;
+			offset+=typsize(type);
+			error(Doing,"D: Function %s %y",ident,type);
+		}
+		see=seetoken();
+	}
+	while ( see->is!=CloseBracket &&
+			eatatoken(Comma,"Expected Comma in function declaration") );
+	*bot=0;
+	return top;
+}
+
+##--------------------------------------------------------
+
+char mods[]={Star,Mod,Function,OpenArray,0};
+
+extern void typfree( Tnode *tn )
+{
+	int is; Tnode *t;
+	while ( tn>0x8000 && strchr(mods,(is=tn->is) & FlagsAfter) )
+	{
+		if ( is==Function && tn->value>0x8000 ) stlfree(tn->value);
+		t=tn; tn=tn->type; free(t);
+## Ooh, does this not cry out for backcommas?  free( tn <- tn=tn->type )
+	}
+}
+
+extern Tnode *typdup( Tnode *tn )
+{
+	int is; Tnode *top, **nu, *n; nu=&top;
+	while ( tn>0x8000 && strchr(mods,(is=tn->is) & FlagsAfter) )
+	{
+		*nu=n=new_tnode(); nu=&n->type;
+		n->is = is;
+		if ( is == Function && tn->value>0x8000 )
+			n->value = stldup(tn->value);
+		else
+			n->value = tn->value;
+		tn=tn->type;
+	}
+	*nu=tn;
+	return top;
+}
+
+/* This function is intended to implement A6.5 for types t1 and t2 */
+
+int typpromo( int tt1, int tt2 ) {
+	int t1, t2;
+	t1 = tt1 & FlagsAfter; t2 = tt2 & FlagsAfter;
+	if ( t1==LongDouble || t2==LongDouble ) return LongDouble;
+	if ( t1==Double     || t2==Double     ) return Double;
+	if ( t1==Float      || t2==Float      ) return Float;
+/* A6.1 */
+	if ( t1==Char || t1==Short ) t1=Int;
+	if ( t2==Char || t2==Short ) t2=Int;
+	t1|=( tt1 & Unsigned_Q ); t2|=( tt2 & Unsigned_Q );
+/* A6,5 */
+	if ( t1==Long+Unsigned_Q || t2==Long+Unsigned_Q ) {
+		if ( ~t1 & Unsigned_Q || ~t2 & Unsigned_Q )
+			error(Warn,"Type has lost signedness vs unsigned long");
+		return Long+Unsigned_Q;
+	}
+	/* These because int==long; would return Long, otherwise. */
+	if ( ( t1==Long && t2==Int+Unsigned_Q ) ||
+		 ( t2==Long && t1==Int+Unsigned_Q ) ) {
+		error(Warn,"Long has lost signedness vs unsigned int");
+		return Long+Unsigned_Q;
+	}
+	if ( t1==Long || t2==Long ) return Long;
+	if ( t1==Int+Unsigned_Q || t2==Int+Unsigned_Q ) return Int+Unsigned_Q;
+	return Int;
+}
+
+#Note This doesn't handle typedef/struct/union/enums or mods properly yet
+#Is typcmp for checking strict equivalence or handling promotions?
+## typedef match by id pointer, or are stepped with typ_weak error
+## struct/union are to match by id pointer
+## enums equate to long with typ_weak error
+## mods should be accumulated to check ConVol_Q
+
+## typ_xxx in struct.h
+
+extern int loosecharstar_flag=0;
+
+extern int typcmp( Tnode *base, Tnode *checkme, int strict )
+{
+	int ib,ic, mb,mc, ret;
+	ret=0; mb=mc=0;
+	while ( base>0x8000 && checkme>0x8000 &&
+			strchr(mods, (ib=base->is) & FlagsAfter) &&		/* Star, Mod, Fn */
+			strchr(mods, (ic=checkme->is) & FlagsAfter) )	/* ..OpenArray */
+	{
+		if ( (ib ^ ic) & ConVol_Q ) ret |= typ_mods;
+		ib &= ~ConVol_Q; ic &= ~ConVol_Q;
+		if ( ib==ic && ib==OpenArray ) {
+			if ( base->value != checkme->value ) ret |= typ_arrsz;
+		}
+		if ( ( ib==OpenArray && ic==Star )
+			|( ic==OpenArray && ib==Star ) ) ret |= typ_arrpt;
+		if ( ib==ic && ib==Star )
+		{
+			int rr;
+#This incorrectly returns void** valid vs T**; should only be void* vs T**
+			rr=typcmp(base->type,checkme->type,strict);
+			if ( rr & typ_type ) rr = ( rr & ~typ_type ) | typ_pointer;
+			error(Doing,"G:typcmp base %y %y\n",
+				base->type,(base->type>0x8000)?base->type->is:0);
+			error(Doing,"G:typcmp checkme %y %y\n",
+				checkme->type,(checkme->type>0x8000)?checkme->type->is:0);
+			if ( base->type == Void || checkme->type == Void ) {
+				rr &= ~typ_pointer;
+			}
+			if ( loosecharstar_flag &&
+				( ( base->type<0x8000 && (base->type & FlagsAfter) == Char ) ||
+					( checkme->type<0x8000 &&
+						(checkme->type & FlagsAfter) == Char ) ) ) {
+				rr &= ~typ_pointer;
+			}
+			return rr | ret;
+		}
+		base=base->type; checkme=checkme->type;
+	}
+#Unwritten code in typcmp - Appendix A6 - conversions/promotions
+## This is to handle basic checks, but needs extending to all others, too.
+	if ( base == checkme ) return ret;
+	if ( base<0x8000 && checkme<0x8000 ) {
+		if ( !ret ) {
+			ib=base; ic=checkme;
+			ib &= FlagsAfter; ic &= FlagsAfter;
+			return ( ib != ic ) ? 0 : typ_type;
+		}
+		else
+			return typ_weak;
+	}
+	if ( ( ( base > 0x8000 ) && base->is==Enum && checkme==Int ) ||
+	 ( ( checkme > 0x8000 ) && checkme->is==Enum && base==Int ) ) {
+		return ret; /* | typ_weak; XXX */
+	}
+	return ret | typ_type;
+}

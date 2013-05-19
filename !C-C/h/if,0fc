@@ -1,0 +1,28 @@
+
+/* if.h  Removed from prepr.c because the BASIC compiler
+ * was getting its knickers in a twist over memory left
+ */
+
+
+enum { if_pass, elif_seek, endif_seek, endif_expecting };
+
+typedef struct ifnode IFnode;
+
+struct ifnode  {
+               IFnode *last;
+                  int  seek,
+                       incdepth;
+                 char *incname;
+               };
+
+extern IFnode *iflist;   /* If stack of outstanding conditionals */
+
+extern int             iflines_flag;
+
+extern void destruct_ifs(); /* Clear up on abort */
+extern void do_if     (char *line, char *lptr);
+extern void do_ifdef  (char *line, char *lptr);
+extern void do_ifndef (char *line, char *lptr);
+extern void do_endif  (char *line, char *lptr);
+extern void do_elif   (char *line, char *lptr);
+extern void do_else   (char *line, char *lptr);

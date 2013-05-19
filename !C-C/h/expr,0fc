@@ -1,0 +1,30 @@
+
+##  Expression builder.  (Operator precedence parser)
+
+struct enode {
+				int      MAGIC;
+		struct enode	*left, *right;
+		struct tnode	*type;
+				int		 is, data, width;
+			};
+
+typedef struct enode Enode;
+
+##--------------------------------------------------------------------
+extern int ENODE;
+extern Enode *new_enode();
+extern int free_enode( Enode *kill );
+##--------------------------------------------------------------------
+
+## For array consts, case : consts, enum consts etc
+## Only eats IntConsts at the moment (nb at end of .c)
+## area is "case constant" or "array constant", for errors
+
+extern int		constant_expression( char *area );
+
+## For everything else, pretty much
+
+extern Enode	*parseexpr( int conditional, int endtok);
+extern void		 freeexpr ( Enode *);
+extern void		 printexpr( Enode *);
+extern void		 prettyexpr( Enode *, int);

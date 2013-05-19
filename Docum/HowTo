@@ -1,0 +1,13 @@
+Suggest:
+
+* Stick more rigidly to the literal grammar of ANSI C, and only do the checking
+	in the bits which build internal structures.
+
+* Manage building internal structures so that a call to the tokeniser could
+	easily free everything. This means that nexttoken(), backtoken() and
+	freetoken() should no longer be used, in favour of seetoken() and
+	poptoken(), which allow the tokeniser to keep hold of all tokens in use.
+	steptoken() should pop the current token and return the following one.
+
+	Also means that internal structures should have 0 in all invalid pointers
+	over calls to tokens.

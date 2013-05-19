@@ -1,0 +1,30 @@
+
+## Tree.c -- Tree handler for macros, variables and typedefs.
+
+struct base_node  {
+				  int  MAGIC;
+	struct base_node  *left, *right;
+                 char *name;
+};
+
+typedef struct base_node Bnode;
+
+
+## Return address of extant named node in list, or return a new one of size
+## Note, name="" is never found, new node is concealed on the ->right
+extern Bnode  *seekadd ( char *name , Bnode *head, int size, int MAGIC);
+
+## Return address of extant named node in list, or NULL
+## Note, name="" is never found.
+extern Bnode  *seekfind( char *, Bnode * );
+
+## Return extant named node in list, parent lists, or NULL
+## Note, name="" is never found.
+extern Bnode  *Lseekfind( char *, Bnode * );
+
+## Return a new header. Internally, name=""
+extern Bnode *makeheader( int size, int MAGIC );
+
+## Iterate over each node. Accepts a function for something (eg freeID).
+extern void iterate( Bnode *root, void (*func)(void *) );
+extern void iterate_ordered( Bnode *root, void (*func)(void *) );

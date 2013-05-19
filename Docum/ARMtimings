@@ -1,0 +1,38 @@
+ARM Timings
+--- -------
+
+Sequential cycles used to access memory in sequential order, eg a series
+ of group one instructions with no branching interruptions or Ldr/Ldm.
+
+Non-sequential cycles: non-sequenial memory accessed. Eg first intruction
+ after a branch will use an n cycle
+
+Internal cycles. No memory access. internal op only.
+
+typical ARM - clock is 8MHz.
+
+        S cycles - 125ns RAM, 250ns ROM
+        N cycles - 250ns RAM/ROM
+        I cycles - 125ns RAM/ROM
+
+Skipped conditional instructions always execute in 1 s-cycle.
+
+Group 1. Mov, Add etc - 1 s-cycle
+                                  + 1s if rhs has a shift count from a reg
+                                               (ie not from a constant)
+                                  + 1s+1n if dest is R15
+
+Group 1a. Mul, Mla - 1s+16i is worst case
+                     1s     is mult by 0 or 1
+
+
+Group 2. Ldr 1s+1n+1i             + 1s+1n if dest is R15
+         Str 2n
+
+Group 3. Ldm (regs-1)s+1n+1i      + 1s+1n if R15 is loaded
+         Stm 2n+(regs-1)s
+
+Group 4. B,BL 2s+1n
+
+Group 5. SWI 2s+1n                + the routine's time of course.
+

@@ -1,0 +1,83 @@
+/*  tokens.h -- Gives next token, also allows lookahead */
+
+/* Nothing in this enumeration is referred to by number. */
+
+enum {
+
+	NullToken,
+
+		Ident, IntConst, RealConst, CharConst, String, WideChar, WideStr,
+		  Ellipsis, OpenBracket, CloseBracket,
+		OpenArray, CloseArray, Function, Dot, Arrow, PostInc, PostDec,
+		PreInc, PreDec, SizeOf, AddressOf, Star, Positive,
+		  Negative, BitNot, LogNot,		/* Right to left */
+		Typecast,
+		Times, Div, Mod,
+		Add, Take,
+		LeftShift, RightShift,
+		LessThan, GreaterThan, LessEqual, GreaterEqual,
+		IsEqual, NotEqual,
+		BitAnd,
+		BitEor,
+		BitOr,
+		LogAnd,
+		LogOr,
+		Query, Colon,					/* Right to left */
+		Assign, TimesEqual, DivEqual, ModEqual, AddEqual, TakeEqual,
+		  LeftShiftEqual, RightShiftEqual, AndEqual, EorEqual, OrEqual,
+										/* Right to left */
+		Comma,
+
+	SemiColon, OpenCurly, CloseCurly,   /* Symbol-like tokens */
+
+	KeyWords, /* The start of keyword-like tokens. Index in token.c */
+
+		Auto, Break, Case, Char, Const, Continue, Default, Do, Double, Else,
+		Enum, Extern, Float, For, Goto, If, Int, Long, Register, Return, Short,
+		Signed, _SIZE_OF_, Static, Struct, Switch, Typedef, Union, Unsigned,
+		Void, Volatile, While,
+
+## Hereon are specials -- internal tokens etc, but the keyword array
+##  in error.c is extended to describe these too.
+
+		EndKeyWords,		/* Just a marker */
+		eof,				/* Causes error if encountered inside something */
+		CharFloat,			/* char float is a non-ANSI BCD float */
+		LongDouble,			/* long double is a composite keyword */
+		ErrorType,			/* Type is legal in all typechecking  */
+		Sys,				/* Token for sys psuedo-keyword */
+
+##	 These are NOT token values, this is just a convenient place to put them.
+##		error.c knows about these too, though.
+##	 It's also probably really, really important to point out that these
+##		wo'n't fit into chars...
+
+		FlagsAfter	= 0xFF,		/* Doubles as non-flag mask */
+		Unsigned_Q	= 0x100,	/* Absence asserts Signed_Q */
+		SignSet_Q	= 0x200,	/* Sign was set explicitly */
+		Const_Q		= 0x400,	/* This type/modifier is qualified Const */
+		Volatile_Q	= 0x800,	/* This type/modifier is qualified Volatile */
+		ConVol_Q	= 0xC00,	/* This mask is qualified Const and Volatile */
+		Alt_Q		= 0x1000,	/* Token has `alternate' meaning */
+
+		ILLEGAL_FLAG_VALUE = 0x8000
+};
+
+struct token { int MAGIC; int is; char *data; };
+
+typedef struct token Token;
+
+##-----------------------------------------------------
+extern int TOKEN;
+extern Token *new_token();
+extern int free_token( Token *kill );
+##-----------------------------------------------------
+
+extern Token	*seetoken( void );		/* Return pointer to current token */
+extern Token	*taketoken( void );		/* Eat current token, return new */
+
+extern Token	*peektoken ( int );		/* Return nth token from now (see=0) */
+
+extern int		eatatoken( int tokval, char *errstr );
+## 		if seetoken()==tokval	taketoken(), return true
+##						else	error(Error,errstr), return false
