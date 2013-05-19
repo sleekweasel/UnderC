@@ -6,3 +6,6 @@ BBC BASIC, and !C-C which is my half-written C translation of OverC.
 OverC seems to run on RISC OS 3.71 (particularly rpcemu), but not on the
 Raspberry Pi for some reason - it gets an illegal something or other.
 
+This repository is in the form of an rpcemu 'hostfs', so filetypes are stored
+as ,xxx at the ends of files. If you want to run it on a real machine, you'll
+need to run something - like the provided ./retype as an OBEY file.
