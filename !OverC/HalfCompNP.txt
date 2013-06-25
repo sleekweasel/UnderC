@@ -1,0 +1,5085 @@
+REM > <MC$Path>HalfCompil
+
+*|KEY 1 A%=1:REPEATPRINT(A%+2)/3;" ";FNcut(MID$(opl$,A%,3));" FN ";FNcut(MID$(opm$,A%,3));" FN ";FNcut(MID$(opr$,A%,3)):A%+=3:UNTILA%=148
+
+REM **** Initialise libraries
+
+LIBRARY "<Basic$Lib>.BinTree"
+LIBRARY "<Basic$Lib>.Records"
+
+REM **** Clear screen and set up debugging information
+
+VDU22,MODE,31;31;31;63;:height%=VPOS:VDU12,8:width%=POS:VDU12
+
+REM **** Get file to decode
+
+IF NOT QUIT THEN
+ REPEAT
+  INPUT "C-- Compiler."'"Enter pathname:"file$
+  directory$=file$
+  REPEAT
+   `=INSTR(directory$,".c.")
+   MID$(directory$,`)=".h."
+  UNTIL INSTR(directory$,".c.")=0
+  file$=MID$(directory$,`+3)
+  directory$=LEFT$(directory$,`-1)
+  afile$="RAM:$.assembly"
+  ofile$=directory$+".o."+file$
+  file$=directory$+".c."+file$
+  C%=OPENINfile$:IF C%=0 PRINT"No such file"
+ UNTIL C%
+ CLOSE#C%
+ PRINT"1..Compiler"'"2..Stat parse"'"4..Type Parse"'"8..expr parse"'"<S>hift..Params"
+ PRINT"Debug (1..9A..F/' ')?";
+ g$=FNke(" 123456789ABCDEFS!@#$%^&*(abcdef")
+ DEBUG=INSTR(" 123456789ABCDEFS!@#$%^&*(abcdef",g$)-1
+
+ SKIP$="1":REM Skip in debug until EVAL SKIP$ = TRUE
+
+ PRINT"Spilt screen (Y,' '/N)?";:split%=FNke(" YN")<>"N"
+ PRINT"Listing (Y,' '/N)?";:listing%=FNke(" YN")<>"N"
+
+ IF DEBUG THEN
+  PRINT"Mouse (Y/' ',N)?";:g$=FNke(" YN"):IF g$="Y" MOUSEON:ELSEMOUSEOFF
+  PRINT"Page mode (Y/' ',N)?";:g$=FNke(" YN"):IF g$="Y" VDU14:ELSEVDU15
+ ENDIF
+
+ELSE
+ IF height%=0 VDU127:REM height%=0 if using !Edit taskwindow
+ PRINT"C-- Compiler V0.51"'"------------------"'
+ SYS "OS_GetEnv" TO F%
+ file$="":ofile$="":`$=""
+ REPEAT `$+=CHR$?F%:F%+=1:UNTIL?F%<32:`$+=" "
+ WHILE INSTR(`$," ")>1
+   `$=MID$(`$,INSTR(`$," ")+1)
+   IF LEFT$(`$,INSTR(`$," "))="-Source " `$=MID$(`$,INSTR(`$," ")+1):file$=LEFT$(`$,INSTR(`$," ")):file$=LEFT$(file$,INSTR(file$," ")-1)
+   IF LEFT$(`$,INSTR(`$," "))="-Object " `$=MID$(`$,INSTR(`$," ")+1):ofile$=LEFT$(`$,INSTR(`$," ")):ofile$=LEFT$(ofile$,INSTR(ofile$," ")-1)
+ ENDWHILE
+ I%=INSTR(file$,".c.")+INSTR(file$,".C.")
+ IF I%=0 AND ofile$="" THEN
+  PRINT"* * * *"
+  PRINT"Warning - Input file is not a .c file. Output to ";file$;"X"
+  PRINT"* * * *"'
+  afile$="RAM:$.assembly":ofile$=file$+"X":directory$="@"
+ ELSE
+  afile$="RAM:$.assembly"
+  IF ofile$="" ofile$=file$:MID$(ofile$,I%)=".o."
+  directory$=LEFT$(ofile$,I%-1)
+ ENDIF
+ PRINT"Compiling file ";file$'"          into ";afile$;"   (Object:";ofile$;")"'"Homedir:"directory$''
+ DEBUG=FALSE:split%=height%:listing%=height%
+ENDIF
+
+REM **** Set up program error handler
+
+error_chan%=OPENOUT"RAM:Errors"
+
+ON ERROR ON ERROR OFF:PROCbot:FORA%=1TOLENREPORT$:VDUASCMID$(REPORT$,A%)ANDASCMID$(REPORT$,A%)>31:NEXT:PRINT" at line ";ERL:IF NOT INKEY-113 PROClexdown:PROCcompdown:CLOSE#error_chan%:OSCLI"SetType RAM:Errors Text":END:ELSEEND
+
+REM **** Initialise lexer, parser and code output routines
+
+PROClexinit(file$)
+PROCparseinit:PROCcompinit:STATDEP=0:ARIDEP=0
+
+REM **** Do the compilation
+
+TIME=0:tok$=FNtoken:tree%=FNparse(0,"",glid%):PROCbot:PRINT"Compilation completed in ";TIME/100;" seconds"
+
+REM **** Finish and shut the input and output files
+
+PROClexdown
+PROCcompdown
+
+CLOSE#error_chan%:OSCLI"SetType RAM:Errors Text"
+
+VDU15
+
+IF QUIT CHAIN"RAM:$.assembly"
+
+END
+
+***************************
+*
+*  Misc functions.
+*
+***************************
+
+DEFPROCtop
+ IF split% AND NOT _top% CursPos1%=VPOS*256+POS:VDU26,28,0,height%/2-1,width%,0,31,CursPos2%;
+ _top%=TRUE
+ENDPROC
+
+DEFPROCbot
+ IF split% AND _top% CursPos2%=VPOS*256+POS:VDU26,28,0,height%,width%,height%/2+1,31,CursPos1%;
+ _top%=FALSE
+ENDPROC
+
+*  Print and return a keypress from (a$)
+
+DEFFNke(a$):LOCALg$:REPEATg$=GET$:UNTILINSTR(a$,g$):PRINTg$:=g$
+
+*  Return a blank identifier tree root node
+
+DEFFNblank:LOCALA%,F%
+A%=FNnew(idtr%):PROCputZ(0,A%,"left",idtr%):PROCputZ(0,A%,"right",idtr%):PROCputZ(0,A%,"type",idtr%):DIM F% 1:$F%="":PROCputZ(F%,A%,"name",idtr%):=A%
+
+*  Search the identifier tree chain (tree%) for the identifier a$,
+*   stripping the token prefix 'idt.' if it exists.
+
+DEFFNiseek(a$,tree%):LOCALfou%:IF LEFT$(a$,4)="idt." a$=MID$(a$,5)
+REPEAT fou%=FNfind(a$,tree%,idtr%):tree%=FNget(tree%,"left",idtr%):UNTILfou%<>0 OR tree%=0:=fou%
+
+*  Strip trailing spaces from a$. Used in printing expressions.
+
+DEFFNcut(a$):=LEFT$(a$,INSTR(a$+" "," ")-1)
+
+*  Consume token w$, or flag error e$ if tok$<>w$
+
+DEFPROCwant(w$,e$)
+ IF tok$<>w$ PROCerror(e$):ELSEtok$=FNtoken
+ENDPROC
+
+***************************
+*
+*  Structure printing functions. For debugging mainly.
+*
+***************************
+
+*  Top level expression printer
+
+DEFPROCprint(tree%)
+ PROCbot
+ IF FNlost(tree%,expr%) PRINT" <nothing> ";:ENDPROC
+ PROCprtree(tree%)
+ENDPROC
+
+*  Recursive part of expression printer
+
+DEFPROCprtree(tree%):IF FNlost(tree%,expr%) PRINT"`";:ENDPROC
+LOCAL typ%
+ typ%=FNget(tree%,"type",expr%)
+ CASE typ% OF
+  WHEN 0 : typ%=FNget(FNget(tree%,"right",expr%),"name",idtr%)
+           IF typ%>0 PRINT$typ%;:ELSEPRINT"< $-somthing >";
+  WHEN 3,4:
+   PRINTFNcut(MID$(opl$,typ%*3-2,3));
+   PROCprtree(FNget(tree%,"left",expr%))
+   PRINTFNcut(MID$(opm$,typ%*3-2,3));
+   PRINT;FNget(tree%,"right",expr%);
+   PRINTFNcut(MID$(opr$,typ%*3-2,3));
+  OTHERWISE:
+   PRINTFNcut(MID$(opl$,typ%*3-2,3));
+   IF 5>typ% OR typ%>15 PROCprtree(FNget(tree%,"left",expr%))
+   PRINTFNcut(MID$(opm$,typ%*3-2,3));
+   PROCprtree(FNget(tree%,"right",expr%))
+   PRINTFNcut(MID$(opr$,typ%*3-2,3));
+ ENDCASE
+
+ IF DEBUG AND 4 PROCprtype(FNget(tree%,"tptr",expr%),POS)
+
+ENDPROC
+
+*  Display identifier tree node%'s information.
+*   tb% is length of space indent
+
+DEFPROClvar(node%,tb%):PROCbot
+ IFnode%=0 PRINTTAB(tb%);"Ident tree empty":ENDPROC
+ LOCALP%
+ IF FNget(node%,"left",idtr%)<>0 PROClvar(FNget(node%,"left",idtr%),tb%)
+ IF $FNget(node%,"name",idtr%)="" PRINTTAB(tb%);"Name : nodt : locn : type : type list"
+
+ PRINTTAB(tb%);$FNget(node%,"name",idtr%);" : ";FNget(node%,"nodt",idtr%);" : ";FNget(node%,"locn",idtr%);" : ";FNget(node%,"type",idtr%);" : ";
+ CASE FNget(node%,"nodt",idtr%) OF
+  WHEN 8:PRINT"Enum member ";FNget(node%,"size",idtr%)
+  WHEN 7:PRINT"Enum handle"
+  OTHERWISE:
+  IF FNget(node%,"nodt",idtr%)=2 THEN
+   PRINT" Declared function, "
+REM   P%=FNget(node%,"type",idtr%)
+REM   PROCstlist(FNget(P%,"size",idtr%),tb%)
+   PRINT'TAB(tb%);"returning:"
+  ENDIF
+  P%=FNget(node%,"type",idtr%)
+  PROCprtype(P%,tb%)
+ ENDCASE
+
+ IF FNget(node%,"right",idtr%)<>0 PROClvar(FNget(node%,"right",idtr%),tb%)
+ENDPROC
+
+*  Display type chain P%
+*   tb% is length of space indent
+
+DEFPROCprtype(P%,tb%)
+
+ PROCbot
+
+  IF P%<&8000 THEN
+   REM P% is a basic type, like char possibly with flags. (Or rubbish)
+
+   CASE P% AND 3 OF
+    WHEN 0:PRINT"void"
+    WHEN 1:PRINT"char"
+    WHEN 2:PRINT"float"
+    WHEN 3:PRINT"int"
+   ENDCASE
+  ELSE
+
+   WHILE FNget(P%,"nodt",idtr%)=4
+    CASE FNget(P%,"locn",idtr%) OF
+     WHEN 0:PRINT" `";
+     WHEN 1:PRINT" *";
+     WHEN 2:PRINT" [";FNget(P%,"size",idtr%);"]";
+     WHEN 3:PRINT" ()";
+     WHEN 4:PRINT" bracket (shouldn't be here)";
+     OTHERWISE: PRINT" dunno locn # ";FNget(P%,"locn",idtr%);
+    ENDCASE
+    P%=FNget(P%,"type",idtr%)
+   ENDWHILE
+   CASE FNget(P%,"nodt",idtr%) OF
+    WHEN 1:PRINT" typedef ";$FNget(P%,"name",idtr%)
+    WHEN 2:PRINT" function ?! ";$FNget(P%,"name",idtr%)
+    WHEN 3:PRINT" ident ?! ";$FNget(P%,"name",idtr%)
+    WHEN 4:PRINT" bug-bug"
+    WHEN 5:PRINT" struct ";$FNget(P%,"name",idtr%)
+     IF FNget(P%,"type",idtr%)<>0 THEN
+      IF INKEY-1 PRINT'':PROClvar(FNget(P%,"type",idtr%),tb%+4):PRINT
+     ELSE
+      PRINT" (Undefined.)"
+     ENDIF
+    WHEN 6:PRINT" union ";$FNget(P%,"name",idtr%)
+     IF FNget(P%,"type",idtr%)<>0 THEN
+      IF INKEY-1 PRINT'':PROClvar(FNget(P%,"type",idtr%),tb%+4):PRINT
+     ELSE
+      PRINT" (Undefined.)"
+     ENDIF
+    WHEN 7:PRINT" enum ";$FNget(P%,"name",idtr%)
+    WHEN 8:PRINT" enum field ?! ";$FNget(P%,"name",idtr%)
+    OTHERWISE:PRINT" dunno nodt # ";FNget(P%,"nodt",idtr%)
+   ENDCASE
+  ENDIF
+
+ENDPROC
+
+*  Display statement list st%.
+
+DEFPROCstlist(st%,tb%)
+PROCbot
+WHILE st%<>0
+ CASE FNget(st%,"type",stmt%) OF
+  WHEN 128:
+   PRINTTAB(tb%);"for (";:PROCprint(FNget(st%,"first",stmt%))
+   PRINTTAB(tb%);";";:PROCprint(FNget(st%,"second",stmt%))
+   PRINTTAB(tb%);";";:PROCprint(FNget(st%,"third",stmt%))
+   PRINT")":PROCstlist(FNget(st%,"fourth",stmt%),tb%+4)
+  WHEN 129:
+   PRINTTAB(tb%);"if [129] (";:PROCprint(FNget(st%,"first",stmt%))
+   PRINT" ) then ";:PROCstlist(FNget(st%,"second",stmt%),tb%+4)
+   PRINTTAB(tb%);"endif"
+  WHEN 130:
+   PRINTTAB(tb%);"while (";:PROCprint(FNget(st%,"first",stmt%))
+   PRINT" )"TAB(tb%);"{ ";:PROCstlist(FNget(st%,"second",stmt%),tb%+4)
+   PRINTTAB(tb%);"}"
+  WHEN 131,143:
+   PRINTTAB(tb%);"do { ";:PROCstlist(FNget(st%,"first",stmt%),tb%+4)
+   PRINTTAB(tb%);"} while ( ";:PROCprint(FNget(st%,"second",stmt%)):PRINT" )"
+  WHEN 132,142:
+   PRINTTAB(tb%);"{ /* [";FNget(st%,"type",stmt%);"] local vars size is ";FNget(st%,"third",stmt%);" */"
+   PROClvar(FNget(FNget(st%,"first",stmt%),"right",idtr%),tb%)
+   IF FNget(st%,"fourth",stmt%)<>0 PROCstlist(FNget(st%,"fourth",stmt%),tb%+4):ELSEPRINTTAB(tb%);"No statements"
+   PRINTTAB(tb%);"}"
+  WHEN 133:PRINTTAB(tb%);"return ";:PROCprint(FNget(st%,"first",stmt%))
+  WHEN 134:PRINTTAB(tb%);"switch ( ";:PROCprint(FNget(st%,"first",stmt%)):PRINT" )"
+           PROCstlist(FNget(st%,"second",stmt%),tb%+4)
+  WHEN 135:PRINTTAB(tb%);"goto ";:PROCprint(FNget(st%,"first",stmt%))
+  WHEN 136:PRINTTAB(tb%);"continue;"
+  WHEN 137:PRINTTAB(tb%-2);"default:"
+  WHEN 138:PRINTTAB(tb%);"break;"
+  WHEN 139:PRINTTAB(tb%-2);"case 0x";~FNget(st%,"first",stmt%);
+           IF 32<FNget(st%,"first",stmt%) AND FNget(st%,"first",stmt%)<127 VDU39,FNget(st%,"first",stmt%),39
+           PRINT" :"
+  WHEN 140:IF FNget(st%,"first",stmt%)<>0 PRINTTAB(tb%);:PROCprint(FNget(st%,"first",stmt%))
+  WHEN 141:
+   PRINTTAB(tb%);"if [141] ( ";:PROCprint(FNget(st%,"first",stmt%))
+   PRINT" )";TAB(tb%);"then ";:PROCstlist(FNget(st%,"second",stmt%),tb%+4)
+   PRINTTAB(tb%);" else ";:PROCstlist(FNget(st%,"third",stmt%),tb%+4)
+   PRINTTAB(tb%);"endif"
+  WHEN 144:PRINTTAB(tb%);"sys(";:PROCprint(FNget(st%,"first",stmt%)):PRINT")"
+  OTHERWISE:
+   PRINT"Don't know statement number:"FNget(st%,"type",stmt%)
+ ENDCASE
+ st%=FNget(st%,"next",stmt%)
+ENDWHILE
+ENDPROC
+
+***************************
+*
+*  Debugger. Allows live variable analysis, debug node skip 'until'
+*             debug mode change and linenumber trace on/off
+*
+***************************
+
+DEFPROCdebug
+LOCALa$:PROCbot
+IF EVAL SKIP$ ELSEENDPROC
+IF SKIP$<>"1" PRINT"Skipped until ";SKIP$:SKIP$="*"+SKIP$
+PRINT
+REPEAT
+ INPUTLINE"(eXit,Debug <number>,Skip <cond>,Trace <0/1>"'"Eval >"a$
+ VDU11,11:PRINTSTRING$(width%+1," ");STRING$(width%+1,CHR$8);
+ IF a$="X" ERROR 0,"Exit request"
+ IF LEFT$(a$,1)="S" THEN
+  IF a$="S" a$=SKIP$:OSCLI"FX138 0 13"
+  SKIP$=MID$(a$,2):a$=" ":IF SKIP$="" SKIP$="1"
+ ENDIF
+ IF LEFT$(a$,1)="D" DEBUG=VALMID$(a$,2):a$=" "
+ IF LEFT$(a$,1)="T" THEN
+  IF VALMID$(a$,2) TRACEON ELSE TRACEOFF
+  a$=" "
+ ENDIF
+ IF a$<>"" AND a$<>" " PRINT"    ";EVALa$,0;CHR$127;" = ";a$
+UNTILa$=""
+PRINT'"      ";CHR$13;CHR$11;
+IF LEFT$(SKIP$,1)="*" SKIP$="1"
+ENDPROC
+
+***************************
+*
+*  Code writing routines
+*
+***************************
+
+*  Copes with things like align and attempts to decode
+*   ".label op field \comments" into its constituent parts for inclusion
+*   of .a files
+
+DEFPROCoutcode(a$)
+LOCALlb$,o$,i$,ct%
+
+IF LEFT$(a$,1)="\" ENDPROC
+
+REM a$ is assumed to be .label op field \comments. Decode for lbcode.
+
+IF LEFT$(a$,1)="." lb$=MID$(a$,1,INSTR(a$," ")):ct%=LENlb$+1:ELSElb$=""
+
+WHILE MID$(a$,ct%,1)=" " ct%+=1:ENDWHILE
+
+i$=MID$(a$,ct%,INSTR(a$," ",ct%)-ct%):ct%+=LENi$+1
+
+WHILE MID$(a$,ct%,1)=" " ct%+=1:ENDWHILE
+
+o$=MID$(a$,ct%)
+
+PROClbcode(lb$,i$,o$)
+
+ENDPROC
+
+*  Produces code of the form:        MovGE  R1,R2
+*   and datadumps behind unconditional branches
+
+DEFPROCopcode(i$,o$)
+ PROClbcode("",i$,o$)
+ IF i$="B" AND dump%<>0 PROCdatadump
+ENDPROC
+
+DEFPROCdatadump
+ LOCALtmp%,sto%,alig%
+ alig%=TRUE
+ IF dump%<>0 THEN
+  PROCoutcode("\ Data dump")
+  WHILE dump%<>0
+
+   tmp%=FNget(dump%,"load",dpnd%)
+   sto%=FNget(dump%,"stor",dpnd%)
+
+   IF FNget(dump%,"type",dpnd%)<>3 AND NOT alig% PROCoutcode("Align"):alig%=TRUE
+
+   CASE FNget(dump%,"type",dpnd%) OF
+
+    WHEN 0,1,2: PROCerror("ERROR - Data dump restricted.")
+
+    WHEN 3:  REM  ONLY ONE THAT'S USED, AND ONCE ONLY AT THAT.
+
+     PROCoutcode("Align"):PROClbcode("dat"+STR$~tmp%,"EQUS",$sto%)
+     alig%=alig% AND (LEN$sto% MOD 4)=0
+
+   ENDCASE
+
+   tmp%=FNget(dump%,"next",dpnd%):PROClose(dump%,dpnd%):dump%=tmp%
+  ENDWHILE
+  IF NOT alig% PROCoutcode("Align")
+  PROCoutcode("\ Data dump end")
+  dend%=0
+ ENDIF
+ENDPROC
+
+*  Puts a new node at the tail of the data dump list.
+
+DEFFNinsdump(typ%,lod%,sto%)
+LOCALnd%
+ nd%=FNnew(dpnd%)
+ PROCputB(typ%,nd%,"type",dpnd%)
+ PROCputZ(lod%,nd%,"load",dpnd%)
+ PROCputZ(sto%,nd%,"stor",dpnd%)
+ PROCputZ(0,nd%,"next",dpnd%)
+ IF dend%<>0 PROCputZ(nd%,dend%,"next",dpnd%):ELSE dump%=nd%
+ dend%=nd%
+:="dat"+STR$~lod%+FNlbo
+
+*  Produces code of the form: .label MovGE  R1,R2
+
+DEFPROClbcode(lb$,i$,o$)
+
+LOCAL ent%,rec%,con%,next%,op%
+
+ IF lb$<>"" AND LEFT$(lb$,1)<>"." lb$="."+lb$+"_"+STR$fnlb%
+ IF i$="EquS" o$+="+CHR$0"
+
+PROCputline(lb$+" "+i$+" "+o$)
+
+REM *** CHECK UP ON THE LABELLING SITUATION... (LIKE PRECEEDING DOTS...)
+
+REM *** NOT WRITING BASIC ASSEMBLER.
+
+ENDPROC
+
+*  Returns function suffix
+
+DEFFNlbo:="_"+STR$fnlb%
+
+*  Increments fnlb% (between functions)
+
+DEFPROCnewfn:fnlb%+=1:ENDPROC
+
+*  Opens output file, initialises assembly identifier tree, asse%
+*   also sets fnlb% (Makes labels unique between functions) =0
+
+DEFPROCcompinit
+ DIM val%(15):val%()=0
+ compout%=OPENOUTafile$:OSCLI"SetType "+afile$+" BASIC"
+
+ assy_line%=1:BPUT#compout%,13
+
+ PROCputline("ONERRORPRINTREPORT$;"" at line "+CHR$7+""";ERL:END")
+ PROCputline("DIMM%32000,L%-1:pc=15:lr=14:sp=13:ip=12:fp=11:sl=10:PROCstart:zero=0")
+ PROCputline("DEFFNspace(A%):P%+=A%:=opt%")
+ PROCputline("FOR opt%=8 TO 10 STEP2:P%=M%:index%()=0:[OPT opt%")
+
+ PROCopcode("B","`stackinit")
+ fnlb%=0:P%=0:asse%=FNblank
+ pc=15:lr=14:sp=13:ip=12:fp=11:sl=10
+ extref%=1
+ENDPROC
+
+* Prepends line number
+
+DEFPROCputline(a$):BPUT#compout%,CHR$(assy_line%DIV256)+CHR$(assy_line%MOD256)+CHR$(LENa$+4)+a$+CHR$13;:assy_line%+=1:IF DEBUG AND 1 PROCbot:PRINT" --> ",assy_line%-1;" ";a$:PROCtop
+IF NOT INKEY-3 ENDPROC
+IF listing% THEN
+ PROCbot:PRINT;assy_line%;CHR$13;:PROCtop
+ELSE
+ PRINT;STRING$(5,CHR$127);RIGHT$("     "+STR$assy_line%,5);
+ENDIF
+ENDPROC
+
+*  Closes output file, appends stack management and 'malloc.a'
+*   and then the second half of the assembling surround
+*   along with saver and 'execute now' code.
+
+* NOTE that malloc.a and 'execute now' are only added if there are no
+*  external references.
+
+DEFPROCcompdown
+ IF extref%=1 THEN
+  PROCerror("Linking -- Standalone code produced.")
+  run%=OPENIN"<SmallC$Dir>.a.RunAsb"
+  WHILE NOT EOF#run%
+   PROCoutcode(GET$#run%)
+  ENDWHILE
+  CLOSE#run%
+ ELSE
+  PROCerror("Linking -- .o file produced.")
+  PROCputline("align:.`stackinit \ Not stackinit - Start of symbol table")
+ ENDIF
+
+ PROCputext(glid%!right)
+ PROCputline("EquS ""`stackoverf"":DCB 1:align:DCD 0:DCD index%(0)")
+ PROCputline("EquS ""TableEnd"":DCB 0:align: DCD 0:DCD 0")
+
+ PROCputline("]NEXT:PRINT""Code from 0x"";STR$~M%;"""+CHR$7+" to 0x"";STR$~P%;"" Size:"";(P%-M%)/1024;""K""")
+
+ IF extref%=1 THEN
+  PROCputline("OSCLI""Save "+ofile$+" ""+STR$~M%+"" ""+STR$~P%:*SetType "+ofile$+" Absolute")
+ ELSE
+  PROCputline("OSCLI""Save "+ofile$+" ""+STR$~M%+"" ""+STR$~P%:*SetType "+ofile$+" CObject")
+ ENDIF
+
+ PROCputline("*Delete "+afile$)
+ PROCputline("QUIT")
+ PROCputline("DEFPROCstart:DIMindex%("+STR$(extref%-1)+"):ENDPROC")
+
+ PROCputline("DEFFNiden(idx%,why%,RETURN l):LOCALC%:IFopt%=8:=0")
+ PROCputline("IF(why%=1ORwhy%=2)ANDl:=l-P%-4")
+ PROCputline("IFwhy%=3ANDl:=&EB<<24ORl-P%-8>>2AND&FFFFFF")
+ PROCputline("C%=index%(idx%):IF C%=0 C%=P%-M%")
+ PROCputline("index%(idx%)=P%-M%:=why%<<24 OR (P%-M%-C%)")
+ PROCputline("DEFFNlabel(RETURN label):IF label=0 OR label<P% label=P%")
+ PROCputline(":=opt%")
+
+ BPUT#compout%,255
+
+ CLOSE#compout%
+ENDPROC
+
+*  Recursively place symbol table. Alphabetic order, NOT index order.
+
+*  Format: Name, index, offset from start into file.
+*              If index <0, Points to last relocation record
+*              If index >0, Points to location of variable
+
+DEFPROCputext(tree%)
+ IF tree%!left<>0 PROCputext(tree%!left)
+ IF tree%?nodt=2 OR tree%?nodt=3 THEN
+  IF tree%!locn<0 PROCputline("EquS """+$tree%!name+""":DCB 1:align: DCD "+STR$FNsize(tree%!type)+" : DCD index%("+STR$-tree%!locn+")")
+  IF tree%!locn>0 PROCputline("EquS """+$tree%!name+""":DCB 0:align: DCD "+STR$FNsize(tree%!type)+" : DCD "+$tree%!name+"-M%")
+ ENDIF
+ IF tree%!right<>0 PROCputext(tree%!right)
+ENDPROC
+
+***************************
+****************************
+**                          *
+**  Parser Section           *
+**                          *
+****************************
+***************************
+
+***************************
+*
+*  Initialise parser
+*
+***************************
+
+DEFPROCparseinit
+
+REM * Struct declarations
+
+expr%=FNdeclare("?type.?brax.?atom.?prec.^left.^right.^parn.^tptr")
+
+type=0:brax=1:atom=2:prec=3:left=4:right=8:parn=12:tptr=16
+
+stmt%=FNdeclare("?type.??.??.??.^first.^second.^next.^fourth.^third.^prev")
+
+first=4:second=8:next=12:fourth=16:third=20:prev=24
+
+idtr%=FNdeclare("^type.^left.^right.^name.%locn.%size.?nodt")
+
+name=12:locn=16:size=20:nodt=24
+
+dpnd%=FNdeclare("?type.??.??.??.%load.%stor.^next"):dump%=0:dend%=0
+
+load=4:stor=8:next=12
+
+REM * Arithmetic operators. opl$, opm$, opr$ are for debug,
+REM *                       ops$ is for the actual parsing.
+
+opl$="      (  (                                (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  (  "
+opm$="[  (  -> .  (  (  (& (~ (! (* (- (+ (++(--)  *  /  %  +  -  >> << >  >= <  <= == != &  ^  |  && || INKEY$  )?(:  =  += -= *= /= %= >>=<<=&= ^= |= ,  :  "
+opr$="]  )  )  )  ++)--))  )  )  )  )  )  )  )     )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  )  "
+ops$="[  (  -> .  ++ -- .  ~  !  .  .  .  .  .  )  *  /  %  +  -  >> << >  >= <  <= == != &  ^  |  && || ?  ?  .  =  += -= *= /= %= >>=<<=&= ^= |= ,  :  "
+
+REM * Start global identifier tree
+
+glid%=FNblank
+REM This is the global id tree (varables, typedefs and others).
+REM   Identifiers suffixed with 'I', ie vars and typedefs
+REM   structs                   'S'
+REM   unions                    'U'
+REM   enums                     'E'
+REM   gotos                     'G'
+
+REM * Set up basic types int, char and void with associated
+REM *  'pointer to' nodes. (ie char has a pointer to char* type etc)
+
+nod%=FNinsert("intI",glid%,idtr%):IntType%=nod%
+nod%?nodt=1:nod%!type=3:nod%!size=4
+
+    typ%=FNnew(idtr%):typ%?nodt=4
+    typ%!type=nod%:typ%!locn=1
+    nod%!locn=typ%:typ%!size=4
+
+nod%=FNinsert("charI",glid%,idtr%):CharType%=nod%
+nod%?nodt=1:nod%!type=1:nod%!size=1
+
+    typ%=FNnew(idtr%):typ%?nodt=4
+    typ%!type=nod%:typ%!locn=1
+    nod%!locn=typ%:typ%!size=4
+
+nod%=FNinsert("voidI",glid%,idtr%):VoidType%=nod%
+nod%?nodt=1:nod%!type=0:nod%!size=0
+
+    typ%=FNnew(idtr%):typ%?nodt=4
+    typ%!type=nod%:typ%!locn=1
+    nod%!locn=typ%:typ%!size=4
+
+REM * Initialise a dummy node for marking blanks where appropriate
+
+nod%=FNinsert("`dummy",glid%,idtr%):DUMMY%=nod%
+nod%?nodt=8:nod%!locn=0
+nod%!size=0:nod%!type=IntType%
+
+extern%=0
+
+REM *** The following are neither acted upon, nor parsed, and therefore
+REM ***  cause errors: volatile, const, float, double,
+REM ***                auto, unsigned, goto, (and some others :-).
+REM ***
+REM *** extern and static are handled to a limited extent.
+
+REM The method is as follows:
+REM  Construct data type structures. When and only when a function is
+REM   being declared do statements come into play, the function links
+REM   into a local ident tree with subblocks doing a similar thing.
+ 
+ENDPROC
+
+***************************
+*
+*  Statement parser
+*
+***************************
+
+*  Parse C code/variable declarations from tok$ onwards, returning
+*   the top node, but also linking in to the tree% node (if not null)
+
+DEFFNparse(tree%,field$,ide%)
+LOCAL this%,typ%,id%,nu%,flide%,offset%,outer%,idnam$
+idnam$=""
+
+offset%=0   :REM dictates where variables in functions are located
+outer%=tree%:REM Immediate outer subblock pointer
+
+this%=tree% :REM this%=current node pointer
+flide%=ide% :REM flide%=copy of current ident tree. For debugging
+
+IF tree%<>0 this%!prev=0
+REM Put a ceiling on the linked list
+
+IF DEBUG AND 2 AND tree%<>0 PROCdebug:PRINT"Parse: Function local idtr = ";flide%
+
+ extern%=tree%=0  :REM external things are extern, internal things are not,
+                   REM unless explicitly defined otherwise.
+
+REPEAT
+
+ IF DEBUG AND 2 PROCdebug:PRINT"Parse: tree% = ";tree%
+ IF DEBUG AND 2 PROCdebug:PRINT"Parse: field is ";field$;" this node = ";this%?type:PROCstlist(this%,0)
+
+ CASE tok$ OF
+  WHEN "kwd.extern": tok$=FNtoken: extern%=TRUE
+  WHEN "kwd.static": tok$=FNtoken: extern%=FALSE
+                    REM Man, this is /messy/!! :-P
+
+
+  WHEN "kwd.struct","kwd.union","kwd.enum":
+
+   IF DEBUG AND 2 PROCdebug:PRINT"Parse: Found "+tok$+"."
+
+   typ%=FNbasetype(ide%):REM Get type reference for this type
+
+   IF DEBUG AND 2 PROCdebug:PRINT"Parse: Post adt, tok=";tok$
+
+   PROClists(typ%,ide%):REM Insert id declarations into ide%
+
+   extern%=tree%=0:REM Cancel possible extern declaration.
+
+  WHEN "kwd.typedef":
+
+   tok$=FNtoken:REM Eat 'typedef'
+
+   IF DEBUG AND 2 PROCdebug:PRINT"Parse: Found typedef"
+
+   REM typ% is pointer to type chain, idnam$ is the typedef name
+
+   typ%=FNdecla(FNbasetype(ide%),idnam$,ide%)
+
+   REM Register declaration with its type
+
+   id%=FNinsert(idnam$,ide%,idtr%)
+   IF id%=0 THEN
+    PROCerror("Warning - Redefinition of '"+idnam$+"' ignored.")
+   ELSE
+
+    REM Put typedef data into *typ%
+
+    id%!type=typ%:id%?nodt=1
+    id%!size=FNsize(typ%)
+
+    IF DEBUG AND 2 PROCdebug:PRINT"parse: typedef size is :";FNsize(typ%)
+
+    REM Set up 'pointer to' type node linked to typedef node
+
+    typ%=FNnew(idtr%):typ%?nodt=4
+    typ%!type=id%:typ%!locn=1
+    id%!locn=typ%:typ%!size=4
+
+   ENDIF
+
+  WHEN "syb.;":
+
+   IF DEBUG AND 2 PROCdebug:PRINT"Parse: Eating ;"
+
+   tok$=FNtoken
+
+   IF tree% THEN
+
+    REM Create a null expression node, and link it into the stlist.
+
+    id%=FNnew(stmt%):id%!next=0:id%?type=140:id%!first=0
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: Inserting ; node"
+
+    PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+
+    this%=id%:field$="next":PROCendstat(this%)
+
+   ENDIF
+
+  REM this% points to the preceeding tree node (stmt%) whose field$
+  REM  is to be linked to. A statement wishing to link onto it should
+  REM  link a new stmt onto next, point this% to it, zero the new
+  REM  node's next field, and set field$ to the required link-to field.
+  REM Note that the whole tree starts with a subblock declaration,
+  REM  the parent of which is 0
+
+  REM field$ will get converted to field%=this%+field
+
+  WHEN "kwd.for":
+
+   IF tree%=0 THEN
+    PROCerror("Error - 'For' outside function block. (Skipping to '}')")
+    WHILE tok$<>"syb.}" tok$=FNtoken:ENDWHILE:tok$=FNtoken
+   ELSE
+
+    tok$=FNtoken
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: For node, want 'syb.(', got ";tok$
+
+    REM Want (, but code will deal with missing (, or mistaken {.
+
+    IF tok$<>"syb.(" AND tok$<>"syb.{" THEN
+     PROCerror("Warning - 'for' should be followed by '(' (inserted).")
+    ELSE
+     IF tok$="syb.{" PROCerror("Warning - '{' found instead of '(' after 'for'.")
+     tok$=FNtoken
+    ENDIF
+
+    REM Start building 'for' node
+
+    id%=FNnew(stmt%):id%!next=0:id%?type=128
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: For: ";this%;"->";field$;" = ";id%
+    PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+    this%=id%
+
+    REM This block checks for the first expression. Through this entire
+    REM  section, the 'Treating for() as for(;;)' type things will be
+    REM  modified to 'mismatched bracket' type errors.
+
+    IF tok$="syb.}" OR tok$="syb.)" OR LEFT$(tok$,3)="kwd" THEN
+     IF tok$="syb.}" PROCerror("Warning - '}' used to terminate 'for' (Expected ')').")
+     IF LEFT$(tok$,3)="kwd" PROCerror("Warning - Missing ) after 'for'")
+     PROCerror("Warning - 'for( <empty> )' treated as 'for(;;)'.")
+
+     id%!first=0:id%!second=0:id%!third=0
+
+     IF tok$="syb.)" OR tok$="syb.}" tok$=FNtoken
+    ELSE
+
+     REM Check first section
+
+     IF tok$="syb.;" id%!first=0 ELSE id%!first=FNexpr(0,ide%)
+
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: for: Expecting 'syb.;' got ";tok$
+     IF tok$<>"syb.;" THEN
+      IF tok$="syb.}" PROCerror("Warning - '}' used to terminate 'for' (Expected ')').")
+      IF LEFT$(tok$,3)="kwd" PROCerror("Warning - Missing ) after 'for'")
+      PROCerror("Warning - 'for( expr )' treated as 'for(; expr ;)'")
+
+      id%!second=id%!first:id%!first=0:id%!third=0
+
+      IF tok$="syb.)" OR tok$="syb.}" tok$=FNtoken
+     ELSE
+
+      REM Check second section
+
+      tok$=FNtoken
+      IF tok$="syb.;" PROCputZ(0,id%,"second",stmt%) ELSE PROCputZ(FNexpr(0,ide%),id%,"second",stmt%)
+      IF DEBUG AND 2 PROCdebug:PRINT"Parse: for: Expecting 'syb.;' got ";tok$
+      IF tok$<>"syb.;" THEN
+       IF tok$="syb.}" PROCerror("Warning - '}' used to terminate 'for' (Expected ')').")
+       IF LEFT$(tok$,3)="kwd" PROCerror("Warning - Missing ) after 'for'")
+       PROCerror("Warning - 'for( expr; expr )' treated as 'for(; expr ;expr)'")
+       id%!third=id%!second:id%!second=id%!first:id%!first=0
+
+       IF tok$="syb.)" OR tok$="syb.}" tok$=FNtoken
+      ELSE
+
+       REM Check third section
+
+       tok$=FNtoken
+       IF DEBUG AND 2 PROCdebug:PRINT"Parse: for: Expecting 'syb.)' got ";tok$
+       IF tok$="syb.)" OR tok$="syb.}" OR tok$="syb.;" THEN
+       IF tok$="syb.;" PROCerror("Warning - Only two semicolons in 'for' statement."):tok$=FNtoken
+        IF tok$="syb.}" PROCerror("Warning - '}' used to terminate 'for' (Expected ')').")
+        id%!third=0
+       ELSE
+        id%!third=FNexpr(0,ide%)
+        IF tok$="syb.;" PROCerror("Warning - Only two semicolons in 'for' statement."):tok$=FNtoken
+       ENDIF
+       IF tok$<>"syb.)" AND tok$<>"syb.}" PROCerror("Warning - Inserted missing ')' of 'for' statement."):ELSEtok$=FNtoken
+      ENDIF
+     ENDIF
+    ENDIF
+
+    REM Set information to link the next statement (or subbock) onto
+    REM  this%->fourth
+
+    field$="fourth":id%!fourth=0
+   ENDIF
+
+  WHEN "kwd.do":
+
+   REM Scan for 'do' (...while())
+
+   IF tree%=0 THEN
+    PROCerror("Error - 'do' outside function block.")
+   ELSE
+
+    tok$=FNtoken
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: 'Do' node. Next token:";tok$
+
+    REM Make do node
+
+    id%=FNnew(stmt%)
+    id%!next=0:id%?type=131:id%!second=0
+    PROCputZ(id%,this%,field$,stmt%)
+    id%!prev=this%:id%!first=0
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: Do: ";this%;"->";field$;" = ";id%
+    this%=id%:field$="first"
+
+    REM Check for a null node. May be redundant now, but I don't
+    REM  trust the algorithm to cope if I remove it. :-)
+
+    IF tok$="syb.;" THEN
+     id%=FNnew(stmt%):id%!next=0:tok$=FNtoken
+     id%?type=140:id%!first=0
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: Do: Inserting ; node"
+     PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+     field$="next"
+    ENDIF
+   ENDIF
+
+  WHEN "kwd.while":
+
+   REM Scan for 'while()' or 'do ... while()'
+   REM  this decision is half linked to PROCendstat
+
+   IF tree%=0 THEN
+    PROCerror("Error - 'while' outside function block. (Skipping to '}')")
+    WHILE tok$<>"syb.}" tok$=FNtoken:ENDWHILE:tok$=FNtoken
+   ELSE
+    tok$=FNtoken
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: While: want 'syb.(' got:";tok$
+
+    PROCwant("syb.(","Warning - '(' missing after 'while'.")
+
+    REM While is always followed by a bracketted expression.
+
+    type%=FNexpr(0,ide%)
+
+    PROCwant("syb.)","Warning - ')' missing after 'while' expression.")
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: While: This node is:";FNget(this%,"type",stmt%)
+
+    IF this%?type=131 AND this%!first<>0 THEN
+     REM This is a 'do' node. So convert node to a 'do...while()'.
+
+     this%!type=143
+     this%!second=type%:field$="next":PROCendstat(this%)
+    ELSE
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: While: while () {} type."
+
+      REM Effect climbing if needed.
+
+      IF field$="next" THEN
+       PROCtokback(tok$)
+       tok$="dummytoken"
+       PROCendstat(this%)
+       tok$=FNtoken
+      ENDIF
+
+      REM Generate while () {} node.
+
+      id%=FNnew(stmt%):id%!next=0
+      id%?type=130:id%!second=0
+      PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+      this%=id%:id%!first=type%:field$="second"
+     ENDIF
+    ENDIF
+   ENDIF
+
+  WHEN "kwd.switch":
+
+   REM Note that switch is parsed, but not compiled yet.
+
+   IF tree%=0 THEN
+    PROCerror("Error - 'switch' outside function block (Skipping to '}')")
+    WHILE tok$<>"syb.}" tok$=FNtoken:ENDWHILE:tok$=FNtoken
+   ELSE
+    tok$=FNtoken
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: switch node, want 'syb.(', got ";tok$
+    PROCwant("syb.(","Warning - 'switch' condition should start with '('")
+
+    REM Build switch node.
+
+    id%=FNnew(stmt%):id%!next=0:id%?type=134:id%!second=0
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: switch: ";this%;"->";field$;" = ";id%
+
+    PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+    this%=id%
+
+    id%!first=FNexpr(0,ide%)
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: expr returned. Want 'syb.)' Got:";tok$
+
+    PROCwant("syb.)","Warning - 'switch' condition should end with ')'")
+
+    IF tok$<>"syb.{" PROCerror("WARNING - 'switch' MUST be followed by a statement block.")
+
+    field$="second"
+   ENDIF
+
+  REM These statements are all self contained (field$="next" for
+  REM  all of them). Goto will be put here when coded. Note that
+  REM  continue, default and case are not compiled.
+
+  REM sys(char*,(...),(...)[,int]} is special to this compiler.
+  REM The expression is not typechecked except for arithmetic consistency
+
+  WHEN "kwd.continue","kwd.default","kwd.break","kwd.case","kwd.return","kwd.sys":
+   IF tree%=0 THEN
+    PROCerror("Error - '"+kwd$+"' outside function block. (Skipping to '}')")
+    WHILE tok$<>"syb.}" tok$=FNtoken:ENDWHILE:tok$=FNtoken
+   ELSE
+    kwd$=MID$(tok$,5):tok$=FNtoken
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: "+kwd$+" node, want 'syb.(/:/<id>', got ";tok$
+
+    id%=FNnew(stmt%):id%!next=0
+
+    id%!first=0
+
+    CASE kwd$ OF
+     WHEN "continue":id%?type=136
+     WHEN "default" :id%?type=137
+                     PROCwant("syb.:","Warning - Expected ':' after 'default' label.")
+     WHEN "return"  :id%?type=133
+                     IF tok$<>"syb.;" id%!first=FNexpr(0,ide%)
+                     PROCwant("syb.;","Warning - Expected ';' after return.")
+
+     WHEN "break"   :id%?type=138
+     WHEN "case"    :
+      id%?type=139
+
+      REM Check case's label for case validity.
+
+      IF LEFT$(tok$,3)="num" id%?first=VALMID$(tok$,5)
+      IF LEFT$(tok$,3)="idt" THEN
+       type%=FNiseek(tok$,ide%)
+       IF type%=0 THEN
+        PROCerror("Warning - Treating unknown identifier '"+tok$+"' as 0.")
+        id%?first=0
+       ELSE
+        IF type%?nodt=8 THEN
+         id%?first=type%?locn
+        ELSE
+         PROCerror("Warning - Cannot use this identifier '"+tok$+"' here."):id%?first=0
+        ENDIF
+       ENDIF
+      ENDIF
+      IF LEFT$(tok$,3)<>"num" AND LEFT$(tok$,3)<>"ide" PROCerror("Warning - Cannot use this token '"+tok$+"' here."):id%?first=0
+
+      tok$=FNtoken
+      PROCwant("syb.:","Warning - Expected ':' after 'case' label.")
+
+      REM There is the potiential here to allow 'case 20,30,40:' to
+      REM  translate into 'case 10: case 20: case 30:' by resetting
+      REM  an unexpected 'syb.,' into 'kwd.case', but with an ANSI
+      REM  compatibility warning.
+      REM I hate the lack of 'case 10,20,30:' in C.
+
+      REM switch not implemented, of course...
+
+     WHEN "sys"     :
+      id%?type=144
+      PROCwant("syb.(","Warning - Expected '(' before sys expression.")
+      id%!first=FNexpr(0,ide%)
+      PROCwant("syb.)","Warning - Expected ')' after sys expression.")
+      tmp%=id%!first
+
+      REM Get SWI descriptor (char* or int), and check char* for
+      REM  validity.
+
+      WHILE tmp%?type<>0 tmp%=tmp%!left:ENDWHILE
+
+      tmp%=!(tmp%!right+name)
+
+      IF ?tmp%=34 THEN
+       SYS "XOS_SWINumberFromString",,MID$($(tmp%+1),1,INSTR($(tmp%+1),"""")-1) TO ;tmp%
+       IF tmp% AND 1 PROCerror("ERROR - Unknown SWI name")
+      ENDIF
+
+    ENDCASE
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: "+kwd$+": ";this%;"->";field$;" = ";id%
+
+    REM Sort out next stmt's link slot
+
+    PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+    this%=id%:field$="next"
+    PROCendstat(this%)
+   ENDIF
+
+   REM Parse for if
+
+  WHEN "kwd.if":
+   IF tree%=0 THEN
+    PROCerror("Error - 'If' outside function block. (Skipping to '}')")
+    WHILE tok$<>"syb.}" tok$=FNtoken:ENDWHILE:tok$=FNtoken
+   ELSE
+    tok$=FNtoken
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: If node, want 'syb.(', got ";tok$
+    IF tok$<>"syb.(" PROCerror("WARNING - 'if' condition *must* start with '('"):ELSEtok$=FNtoken
+
+    id%=FNnew(stmt%):id%!next=0:id%?type=129:id%!second=0
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: If: ";this%;"->";field$;" = ";id%
+    PROCputZ(id%,this%,field$,stmt%):id%!prev=this%
+    this%=id%
+
+    id%!first=FNexpr(0,ide%)
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: expr returned. Want 'syb.)' Got:";tok$
+    PROCwant("syb.)","WARNING - 'if' condition *must* end with ')'.")
+    IF tok$="idt.then" THEN
+     IF FNiseek("thenI",ide%)=0 THEN
+      PROCerror("Warning - 'then' is not part of C. (skipped)")
+      tok$=FNtoken
+     ELSE
+      PROCerror("Warning - 'then' found after 'if'. Check this.")
+     ENDIF
+    ENDIF
+    field$="second"
+   ENDIF
+
+  REM else should be above an 'if () {}' node, (not an if () {} else {} )
+  REM  this is arranged during PROCendstat()
+
+  WHEN "kwd.else":
+
+   IF tree%=0 THEN
+    PROCerror("Error - 'else' outside function block. (Skipping to '}')")
+    WHILE tok$<>"syb.}" tok$=FNtoken:ENDWHILE:tok$=FNtoken
+   ELSE
+
+    tok$=FNtoken
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: Else: want node=129, got:";this%?type
+
+    IF this%?type<>129 THEN
+     PROCerror("Error - Misplaced 'else'. Check brackets after 'if'.")
+     field$="next"
+    ELSE
+
+     REM Change 'if () {}' into 'if () {} else {}'
+
+     this%?type=141
+
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: 'if' changed to 'if..else'."
+
+     field$="third":this%!third=0
+    ENDIF
+   ENDIF
+
+  REM Start of subblock node.
+
+  WHEN "syb.{":
+
+   tok$=FNtoken
+
+   IF tree%=0 THEN
+    PROCerror("Error - '{' outside function block.")
+   ELSE
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: Found {."
+
+    REM Make a local identifier space/tree (and link into outer one)
+
+    nu%=FNnew(stmt%):id%=FNblank:nu%!first=id%
+    id%!left=ide%:this%!next=0
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: {: ";this%;"->";field$;" = ";nu%
+
+    nu%?type=132:nu%!prev=this%:nu%!third=offset%
+    nu%!next=0:nu%!fourth=0
+    nu%!second=outer%:outer%=nu%
+    ide%=id%:PROCputZ(nu%,this%,field$,stmt%):this%=nu%:field$="fourth"
+
+   ENDIF
+
+  REM Close subblock
+
+  WHEN "syb.}":
+
+   IF DEBUG AND 2 PROCdebug:PRINT"Parse: sub-block: found '}'."
+
+   IF tree%=0 THEN
+    PROCerror("Warning - Found '}' outside a subblock. (skipping)")
+    tok$=FNtoken
+   ELSE
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: Climbing code struct"
+    this%!next=0
+
+    REM ascend structure until an unused bracket node reached
+
+    WHILE this%?type<>132 this%=this%!prev:ENDWHILE
+
+    IF this%!fourth=0 THEN
+
+     REM Ensure a {;} does not grab subsequent statements
+     REM  by disallowing totally blank (null) stlists.
+
+     REM insert a void expression node
+
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: { }: Inserting ; node for { ;}"
+
+     id%=FNnew(stmt%):id%!next=0
+     id%?type=140:id%!first=0
+     this%!fourth=id%:id%!prev=this%
+    ENDIF
+
+    this%?type=142
+
+    REM Restore previous offset% low water mark and outer block,
+    REM  and store current high water mark offset%
+
+    nu%=this%!third:this%!third=offset%
+    offset%=nu%
+    outer%=this%!second
+
+    IF DEBUG AND 2 PROCdebug:PRINT"Parse: At top, this%="this%;" tree%=";tree%
+    IF this%!prev=0 THEN
+
+     REM The '}' was a close for the entire function.
+
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: It's the major one..."
+
+     ide%=!((this%!first)+left)
+
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: Restored ide% (";ide%;") flide% is ";flide%
+
+     REM Save token and fake a passout token 'flag'
+
+     PROCtokback(tok$):tok$="FROGOFF"
+
+    ELSE
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: Found top of struct=";this%
+
+     ide%=!((this%!first)+left)
+
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: Restored ide% (";ide%;") flide% is ";flide%
+
+     tok$=FNtoken:field$="next"
+     PROCendstat(this%)
+
+    ENDIF
+   ENDIF
+
+  REM Now deal with any other tokens found:
+
+  OTHERWISE:
+
+   REM break on eof. This is not done consistently through the compiler.
+
+   IF LEFT$(tok$,3)="eof" WHEN
+
+   REM Match token with anything I can find.
+
+   typ%=FNiseek(MID$(tok$,5)+"I",ide%):IF DEBUG AND 2 PROCbot:PRINT"Parse: ide:"ide%" glid:"glid%" intI";FNiseek("intI",ide%)" typ%"typ%
+   IF typ%=0 AND LEFT$(tok$,3)="idt" typ%=FNiseek(MID$(tok$,5)+"S",ide%)
+   IF typ%=0 AND LEFT$(tok$,3)="idt" typ%=FNiseek(MID$(tok$,5)+"U",ide%)
+   IF typ%=0 AND LEFT$(tok$,3)="idt" typ%=FNiseek(MID$(tok$,5)+"E",ide%)
+
+   REM I should possibly declare this below as int, and call FNexpr.
+   REM  automatic 'declaration' being int and all...
+
+   IF typ%=0 AND LEFT$(tok$,3)="idt" PROCerror("Error - Unknown token '"+tok$+"'."):tok$=FNtoken:extern%=tree%=0:WHEN
+
+   REM Is this is a type adjective?
+
+   IF typ%=0 AND LEFT$(tok$,3)="kwd" PROCerror("Error - '"+tok$+"' not yet implemented."):tok$=FNtoken:extern%=tree%=0:WHEN
+
+   REM If a num or string, nu%='id' (num/string const) ELSE nu%=
+   REM                                                      database type
+
+   IF LEFT$(tok$,3)<>"idt" AND LEFT$(tok$,3)<>"kwd" nu%=3:ELSEnu%=FNget(typ%,"nodt",idtr%)
+
+   IF DEBUG AND 2 PROCdebug:PRINT"Parse: var/type nodt =";nu%
+
+   CASE nu% OF
+
+     REM Deal with typedef declarations (also does int,char,void)
+
+    WHEN 1:
+     IF DEBUG AND 2 PROCdebug:PRINT"Parse: Typedef type found. ("+tok$+")"
+     tok$=FNtoken:PROClists(typ%,ide%)
+
+     REM Deal with types (struct etc) which have 'lost' their
+     REM  introductionary keyword
+
+    WHEN 5:
+     PROCerror("Warning - Missing 'struct' inserted.")
+     PROCtokback(tok$):tok$="kwd.struct"
+    WHEN 6:
+     PROCerror("Warning - Missing 'union' inserted.")
+     PROCtokback(tok$):tok$="kwd.union"
+    WHEN 7:
+     PROCerror("Warning - Missing 'enum' inserted.")
+     PROCtokback(tok$):tok$="kwd.enum"
+
+REM WHEN function,var/id,<something>,enum tag,constant
+
+    REM Make a expression node and link in an expression
+
+    WHEN 2,3,4,8,9:
+     IF tree%=0 THEN
+      PROCerror("Warning - Found spare identifier outside a subblock. (skipping)"):tok$=FNtoken
+     ELSE
+
+      IF INSTR(" }])",MID$(tok$,5))>1 THEN
+       PROCerror("ERROR - Excess '"+MID$(tok$,5)+"' found (and eaten).")
+       tok$=FNtoken
+      ELSE
+
+       IF DEBUG AND 2 PROCdebug:PRINT"Parse: Variable/Function id found. ("+tok$+")"
+
+       nu%=FNnew(stmt%):nu%?type=140
+       this%!next=0
+       PROCputZ(nu%,this%,field$,stmt%):nu%!prev=this%
+
+       IF DEBUG AND 2 PROCdebug:PRINT"Parse: arith: ";this%;"->";field$;" = ";nu%
+
+       this%=FNexpr(0,ide%):nu%!first=this%:this%=nu%:this%!next=0
+       field$="next"
+
+       IF tok$<>"syb.;" PROCtokback(tok$):tok$="syb.;":PROCerror("Warning - Inserted missing ';'.")
+
+       PROCendstat(this%)
+
+      ENDIF
+
+     ENDIF
+
+     REM Bug trap.
+
+    OTHERWISE:
+     PROCerror("INTERNAL - Id with unknown node type (nodt="+STR$FNget(typ%,"nodt",idtr%)+")!")
+     tok$=FNtoken
+   ENDCASE
+
+   extern%=tree%=0: REM Cancel possible extern/static.
+
+ ENDCASE
+
+UNTIL LEFT$(tok$,3)="eof" OR tok$="FROGOFF"
+
+IF tok$="FROGOFF" tok$=FNtoken
+
+IF DEBUG AND 2 PROCdebug:PRINT"Parse: Exit: ide% (";ide%;") glid% is ";glid%
+
+REM .... and run away.
+
+:=tree%
+
+***************************
+*
+*  Endstat
+*
+***************************
+
+*  Called when FNparse wants to go to the next node. Else climbs to
+*   nearest if () {}. While stays put, or climbs ONE.
+*                                 (allows for do..while convertion)
+
+DEFPROCendstat(RETURN nod%)
+
+ REM skip excess ;s
+
+ WHILE tok$="syb.;" tok$=FNtoken:ENDWHILE
+
+ IF DEBUG AND 2 PROCdebug:PRINT"endstat: Climbing on token ";tok$
+
+ IF tok$="kwd.else" THEN
+
+  REM Climb to an else match (co-operatively closes subblocks to get to
+  REM  its if since an excess else is much less likely than a missing }
+  REM  It also brutally closes dangling 'do's with while (FALSE).
+
+  REM while node type<>'if () {}' AND <>open_subblock . . .
+
+  WHILE nod%?type<>129 AND nod%?type<>132
+
+   IF DEBUG AND 2 PROCdebug:PRINT"endstat: Climb found ";nod%;" = ";nod%?type
+
+   IF nod%?type=131 PROCerror("ERROR - Missing 'while' from 'do{} while()'"):nod%!second=0
+   nod%=nod%!prev
+  ENDWHILE
+
+  IF nod%?type=129 THEN
+
+   REM Normal behaviour. Closing an if () {}.
+
+   IF DEBUG AND 2 PROCdebug:PRINT"endstat: Acting on 'else'."
+
+   field$="third":tok$=FNtoken:nod%?type=141:nod%!third=0
+
+  ELSE
+
+   PROCerror("WARNING - Open subblock being closed by 'else'.")
+
+   IF DEBUG AND 2 PROCdebug:PROCstlist(tree%)
+
+   REM Pretend to find a spare } (saving the 'else' to get back here.)
+
+   PROCtokback(tok$):tok$="syb.}":field$="next"
+
+  ENDIF
+ ELSE
+
+  IF tok$="kwd.while" THEN
+   REM Climbing for 'while'
+
+   IF nod%?type<>131 THEN
+    IF ?((nod%!prev)+type)=131 nod%=nod%!prev
+   ENDIF
+
+  ELSE
+
+   REM I'm sure I saw something move in this WHILE clause!
+   REM  (it tried to eat me last Tuesday).
+
+   REM While current node has no next clause, and is not an open
+   REM  subblock, and its parent has no next clause and is
+   REM  not a open subblock, and the current node isn't an
+   REM  'open' do{} [ while()],
+   REM                           Then climb the statement tree.
+
+   REM Basically, We don't climb past an open do{} because we want a
+   REM  while() to appear next, and don't climb out of a sub block
+   REM  because they're there to keep you in...
+
+   WHILE nod%!next=0 AND nod%?type<>132 AND !((nod%!prev)+next)=0 AND ?((nod%!prev)+type)<>132 AND nod%?type<>131
+    IF DEBUG AND 2 PROCdebug:PRINT"endstat: Climbing above type ";nod%?type
+    nod%=nod%!prev
+   ENDWHILE
+
+   IF DEBUG AND 2 PROCdebug:PRINT"endstat: Got correct 'next=' node"
+   field$="next"
+  ENDIF
+ ENDIF
+ENDPROC
+
+***************************
+*
+*  PROClists
+*
+***************************
+
+*  This parses the code just after the type of a declaration
+*   has been decoded (into typ%). It places the variables into
+*   the ide ident structure.
+
+*  With the naughtily global variable 'external%'
+*   TRUE if these variables have external linkage (foo.locn != 0)
+*   FALSE if simply local (foo.locn == 0)
+
+DEFPROClists(typ%,ide%)
+
+LOCALidnam$,sid%,fid%,exit%,size%,strw%
+
+exit%=tok$="syb.;" OR LEFT$(tok$,3)="eof"
+
+IF DEBUG AND 2 PROCdebug:PRINT"lists: (entry) exit =";exit%
+
+WHILE NOT exit%
+
+ REM Get ident name and type modifier chain.
+
+ sid%=FNdecla(typ%,idnam$,ide%)
+
+ IFDEBUG AND 2 PROCdebug:PRINT"lists: Post decla, tok=";tok$
+
+ size%=FNsize(sid%)
+
+ IFDEBUG AND 2 PROCdebug:PRINT"lists: decla type,locn =";sid%!type;",";sid%!locn
+
+ REM Insert ident into id space
+
+ fid%=FNinsert(idnam$,ide%,idtr%)
+
+ IF DEBUG AND 2 PROCdebug:PRINT"lists: Insert (";idnam$;") gave ";fid%
+
+ IF fid%=0 THEN
+  REM We have a duplicate identifier, but it might be a function prototype
+
+  fid%=FNfind(idnam$,ide%,idtr%)
+
+  IF !(fid%!type+locn)<>3 THEN
+   IF fid%!locn>=0 OR ide%<>glid% THEN
+    PROCerror("Error - Duplicate identifier '"+idnam$+"'"):fid%=0
+   ENDIF
+  ELSE
+   PROCerror("Warning - Possible duplicate function '"+idnam$+"'")
+  ENDIF
+ ELSE
+  fid%!locn=0
+ ENDIF
+
+ IF fid%<>0 THEN
+
+  REM Set information into record
+
+  fid%!type=sid%
+  IF ide%=glid% THEN
+   IF extern% AND fid%!locn=0 fid%!locn=-extref%:extref%+=1
+   REM                                  ^ -ve, not defined this file yet
+  ELSE
+   fid%!locn=offset%
+  ENDIF
+
+  IF DEBUG AND 2 PROCdebug:PRINT"lists: Top type node is ";sid%!locn
+
+  IF sid%!locn=3 THEN
+
+   REM This is a function prototype/definition.
+
+   fid%!size=sid%!size:fid%?nodt=2
+
+   IF DEBUG AND 2 PROCdebug:PRINT"lists: Was a function, def'd if tok={. got ";tok$
+
+   REM Is there a definition?
+
+   IF tok$="syb.{" OR tok$="[" fid%!locn=ABS(fid%!locn):PROCfndef(idnam$,ide%):REM                            Function is being defined...
+
+   IF tok$="syb.=" PROCerror("Error - You've very oddly tried to assign a value to a function.")
+
+   REM I've just had a nasty idea - Extend C to allow arrays of function
+   REM  pointers to be initialised with real functions eg:
+   REM
+   REM int (*ip[3])(int a,b) = { { return a+b;}, {int c=a*b; return c*c;},
+   REM                           { return a+2*b } };
+   REM Yeugh!
+
+  ELSE
+
+   REM Just a standard variable
+
+   REM If global, allocate space, but possibly initialise the only
+   REM  globally init'd thing, a char[][]
+
+   IF ide%=glid% THEN
+    IF tok$="syb.=" THEN
+     tok$=FNtoken:fid%!locn=ABS(fid%!locn)
+
+     REM I'm going to make the assumption that the data given will be
+     REM  exactly correct. For this reason, I can ignore nested {}s,
+     REM  and in fact will not expect to find them.
+
+     IF tok$="syb.-" THEN
+      tok$=FNtoken
+      IF LEFT$(tok$,3)<>"num" PROCerror("Error - Attempted negation of non-number during initialisation."):ELSE tok$="num.-"+MID$(tok$,5)
+     ENDIF
+
+     IF LEFT$(tok$,3)="num" PROClbcode("."+idnam$,"DCD",MID$(tok$,5)+" \init")
+     IF LEFT$(tok$,3)="str" PROClbcode("."+idnam$,"Equs",""""+MID$(tok$,5)+""""):PROCoutcode("Align")
+     IF tok$="syb.{" THEN
+      REM Block of data. Has to be correct.
+
+      PROClbcode("."+idnam$,"","\Block initialisation")
+
+      strw%=0:`=sid%
+      IF `!type>&8000 THEN
+       WHILE !(`!type+type)>&8000
+        `=`!type
+       ENDWHILE
+       IF `!locn=2 strw%=`!size
+       IF !(`!type+type) = 1 DaTA$="DCB" ELSE DaTA$="DCD"
+      ELSE
+       IF `!type = 1 DaTA$="DCB" ELSE DaTA$="DCD"
+      ENDIF
+      REPEAT
+
+       tok$=FNtoken
+
+       IF tok$="syb.-" THEN
+        tok$=FNtoken
+        IF LEFT$(tok$,3)<>"num" PROCerror("Error - Attempted negation of non-number during initialisation."):ELSE tok$="num.-"+MID$(tok$,5)
+       ENDIF
+
+       IF LEFT$(tok$,3)="num" PROCopcode(DaTA$,MID$(tok$,5)+" \init")
+       IF LEFT$(tok$,3)="idt" THEN
+             `=FNfind(MID$(tok$,5)+"I",ide%,idtr%)
+             IF `?nodt=8 ``=`!size:ELSE PROCerror("Error - Identifier is not an enum constant"):``=0
+          PROCopcode(DaTA$,STR$``+" \ Enum "+MID$(tok$,5))
+       ENDIF
+       IF LEFT$(tok$,3)="str" THEN
+        `=strw%-LENEVAL(""""+MID$(tok$,5)+"""")
+        IF `<0 PROCerror("WARNING - Initialised array too small for string."):`=0
+        PROCopcode("Equs",""""+MID$(tok$,5)+"""+STRING$("+STR$`+",CHR$0)")
+       ENDIF
+       otk$=LEFT$(tok$,3):tok$=FNtoken
+
+      UNTIL tok$<>"syb.,"
+
+      IF otk$="str" OR DaTA$="DCB" PROCoutcode("Align")
+
+      IF tok$<>"syb.}" PROCerror("Error - Unusually terminated initialisation due to "+tok$+".")
+
+     ENDIF
+
+     tok$=FNtoken
+
+    ELSE
+     REM file local variable
+     IF NOT extern% THEN
+      PROClbcode("."+idnam$,"","FNspace("+STR$size%+")")
+      IF size%AND3 PROCoutcode("Align")
+     ENDIF
+    ENDIF
+   ELSE
+    IF tok$="syb.=" PROCerror("Sorry - Local var init not yet implemented.")
+   ENDIF
+
+   fid%?nodt=3
+
+   offset%+=size%
+
+   offset%=(offset%+3) AND NOT 3
+
+   REM FUDGE: ensures that ints are always aligned. but wastes
+   REM        stack space. I should only align on type!=char and
+   REM        at the start/end of subblocks.
+
+  ENDIF
+
+  REM Also the wish to do for(int x=0; x<100; x++) etc();
+  REM  with an ANSI compatibility warning.
+
+ ENDIF
+
+ REM Assume a comma missing if , or ; not found,
+
+ IF tok$<>"syb.," AND tok$<>"syb.;" THEN
+  PROCerror("Warning - Expected , (inserted) or ;. Found '"+tok$+"'")
+  exit%=LEFT$(tok$,3)="eof"
+ ELSE
+  exit%=tok$="syb.;"
+  tok$=FNtoken
+  IF DEBUG AND 2 PROCdebug:PRINT"lists: Eaten , or ;"
+ ENDIF
+ENDWHILE
+IF DEBUG AND 2 PROCdebug:PRINT"lists: Exitting due to ; (or eof)"
+ENDPROC
+
+***************************
+*
+*  FNfndef
+*
+***************************
+
+*  Set up and call for a definition of a function fnnam$
+
+DEFPROCfndef(fnnam$,ide%)
+LOCALiden%,proto%,nu%
+
+ REM Set up a subnode block (nu%) and local identifier space (iden%)
+
+ nu%=FNnew(stmt%):iden%=FNblank
+ iden%!left=ide%:nu%?type=132
+ nu%!first=iden%:nu%!second=0
+ nu%!third=0:nu%!fourth=0
+ nu%!prev=0:nu%!next=0
+
+ REM Get prototype definition
+
+ proto%=!(FNiseek(fnnam$,ide%)+size)
+
+ REM Insert prototype names into ident space
+
+ pos%=-4
+ IF DEBUG AND 16 PROCdebug:PRINT"fndef: proto%=";proto%
+ WHILE proto%<>0
+ IF DEBUG AND 16 PROCdebug:PRINT"fndef: inserting ";$proto%!name;" into local idtr"':PROClvar(iden%,0)
+  tmp%=FNinsert($(proto%!name),iden%,idtr%)
+  IF tmp%=0 THEN
+   IF $(proto%!name)="" THEN
+    IF proto%!type<>VoidType% PROCerror("ERROR - '"+fnnam$+"' has a blank argument name")
+   ELSE
+    PROCerror("ERROR - '"+$(proto%!name)+"' is a duplicate argument of '"+fnnam$+"'")
+   ENDIF
+  ELSE
+   tmp%!type=proto%!type
+   tmp%!locn=pos%:pos%-=4:tmp%?nodt=3
+  ENDIF
+
+  REM Get next item in list
+
+  proto%=proto%!right
+ ENDWHILE
+
+ REM tok$='{' OR '['. If '[',   Copy M/C (entry) to file.
+ REM                            And get token after ']'
+ REM                  Otherwise Insert APCS entry
+
+REM IF tok$="{" THEN
+
+ tok$=FNtoken:REM Eat '{'
+
+ dummy%=FNparse(nu%,"fourth",iden%)
+
+ PROCfngen(fnnam$,nu%):REM This axes all trees to do with the function
+                       REM  except the very first node and outer tree.
+
+                       REM It doesn't actually, but I'll fix this
+                       REM  in the C version. (We lose memory anyway
+                       REM  through string wasteage)
+
+ PROCwant("syb.}","ERROR - Expected } at end of function definition.")
+
+ REM tok$='[' OR other. If '['    Copy M/C to file.
+ REM                    Otherwise Insert APCS exit
+
+REM ENDIF (tok$="{")
+
+ IF tok$<>"syb.;" PROCtokback(tok$):tok$="syb.;"
+    REM Kludge: no semicolon at end of function needed, but /action/ of
+    REM         one is defined in ANSI standard
+
+    REM This allows int a,b,c,foo(int x,int y,char *z) {...}
+    REM and int foo(int,int,char*),bar(struct animal *,int),a,b;
+
+    REM Still, never mind eh?
+
+ENDPROC
+
+***************************
+*
+*  FNbasetype - Type recognition and (non-typedef) definition
+*
+***************************
+
+REM Sorts out struct, union and enum definition situations, and shoves
+REM  info into the database (and returns a pointer to the type defn),
+
+REM  eg struct foo { int re,im; struct foo *next; }; returns defn of foo
+REM  note typedef needs FNdecla and is not dealt with here although
+REM  types /defined/ under typedef /are/ recognised.
+
+REM Note that struct, enum, union *should be compared by
+REM  pointer-to-record info, /not/ by the name* which may be defined on
+REM  a global /and/ local level. Nameless enums are just free floating
+REM  records with only placemarker use since their list members are
+REM  only initialised integers.
+
+REM I'm doing wrong by telling the computer that
+REM (eg)  enum foo (*bar[10])();
+REM is an incorrect start bracket error in the (re)definition of foo,
+REM rather than a declaration of bar. This code fragment will cause
+REM /real/ problems, but I want to retain the possibility of correcting
+REM (eg) enum foo (bar,askwith,jerry);
+REM maybe three token lookahead (for bracket, ident, equals or comma or
+REM close), but even this wouldn't necessarily solve it fully:
+REM (eg) enum foo (bar)(); and enum foo {bar}();
+REM Similar things with struct fare better in this idea.
+
+REM I can't compile functions yet anyway, so it's not too much of a
+REM  prob.
+
+DEFFNbasetype(ide%)
+LOCALtype%,tmp$,N%,lis%
+
+CASE tok$ OF
+
+ REM Deal with struct&union (I don't know why I bother differentiating
+ REM  them anyway. They behave exactly the same as each other except
+ REM  here. (union has offsets=0 and size=max(tag types), struct has
+ REM  offsets varied and size=sum(tag types' size).)
+
+ WHEN "kwd.struct","kwd.union":
+
+ LOCALstru%,nam$
+
+ REM Record whether struct/union (struct hereafter)
+
+ tmp$=tok$:tok$=FNtoken:stru%=MID$(tmp$,5,1)="s"
+
+ REM If the struct is anonymous
+
+ IF LEFT$(tok$,3)="idt" THEN
+  nam$=MID$(tok$,5)+CHR$(ASCMID$(tmp$,5)-32)
+
+  IF DEBUG AND 4 PROCdebug:PRINT"Adt: Ident ";nam$;" is a ";MID$("structunion",7+stru%*6,6)
+
+  type%=FNiseek(nam$,ide%):REM Find if a prior definition of foo exists
+
+  tok$=FNtoken
+  IF tok$="syb.;" OR type%=0 THEN
+   IF DEBUG AND 4 AND type%=0 PROCdebug:PRINT" does not exist.";
+   IF DEBUG AND 4 PROCdebug:PRINT" Making local void definition."
+
+   REM A 'struct foo;' coding or a global lack of a definition of foo
+   REM requires a local (dummy) definition of foo, technically known as
+   REM a 'void' definition.
+
+   type%=FNinsert(nam$,ide%,idtr%):type%!type=0
+   type%!locn=0:type%?nodt=6+stru%
+
+  ENDIF
+
+  REM type% is now an actual node (possibly dummy) and active pointer
+
+ ELSE
+
+  nam$=""
+  IF DEBUG AND 4 PROCdebug:PRINT"Adt: Unnamed struct being made"
+
+ ENDIF
+
+ IF INSTR(" ([{",RIGHT$(tok$))>2 THEN
+
+  LOCAL off%,top%,styp%,lis%,sid%,max%
+
+  REM Whinge about funny brackets... ( ['s likely huh?!)
+
+  IF INSTR(" ([",RIGHT$(tok$))>2 PROCerror("Warning - "+RIGHT$(tok$)+" used to start a structure definition.")
+
+  tok$=FNtoken:top%=0:off%=0
+
+  REM Main loop for reading in tag fields and types. Similar to PROClists
+
+  REPEAT
+
+   IF DEBUG AND 4 PROCdebug:PRINT"Adt: Looking for typename (possibly ";tok$;")"
+
+   styp%=FNbasetype(ide%)
+
+   REPEAT
+
+    IF tok$="syb.," tok$=FNtoken
+
+    IF top%=0 THEN
+     IF DEBUG AND 4 PROCdebug:PRINT"Adt: First entry in struct"
+     lit%=FNnew(idtr%):lis%=lit%:top%=lis%
+    ELSE
+     IF DEBUG AND 4 PROCdebug:PRINT"Adt: Next entry in struct"
+     lit%=FNnew(idtr%):lis%!right=lit%
+     lis%=lit%
+    ENDIF
+
+    lis%!left=0:lis%?nodt=3
+    tnam$=""
+    sid%=FNdecla(styp%,tnam$,ide%):REM From styp% base type, returns
+                                   REM full type and the name in tnam$
+
+    REM The grotty bit about putting the data into the struct nodes
+
+    DIM N% LENtnam$:$N%=tnam$:lis%!name=N%
+
+    IF DEBUG AND 4 PROCdebug:PRINT"Adt: Inserting fieldname '"+tnam$+"'"
+
+    lis%!type=sid%:lis%!locn=off%
+    lis%!size=sid%!size
+
+    IF stru% off%=(off%+FNsize(sid%)+3) AND NOT 3:IF DEBUG AND 4 PROCdebug:PRINT"Adt: Struct member size is ";FNsize(sid%)
+
+    IF max%<FNsize(sid%) max%=FNsize(sid%)
+
+    IF DEBUG AND 4 PROCdebug:PRINT"Adt: Linked ";tnam$;" OK. Now want a ,; or } (got ";tok$;")"
+
+    REM If tok$ is a comma, go back for another tag name
+
+   UNTIL tok$<>"syb.,"
+
+   IF tok$<>"syb.;" PROCerror("Warning - Inserted missing ; at end of struct field definition.")
+
+   IF tok$="syb.;" tok$=FNtoken
+
+   REM If not a close bracket of some description, go back for
+   REM  another type.
+
+  UNTIL INSTR(" ])}",RIGHT$(tok$,1))>1
+
+  IF tok$<>"syb.}" PROCerror("Warning - "+RIGHT$(tok$)+" used to close a structure definition.")
+
+  lit%!right=0:REM Mark end of structure
+
+  REM Link structure def into id space (if it has a name...)
+
+  IF nam$<>"" THEN
+
+  REM If struct /has/ a name, sid%=the struct's address
+
+   sid%=FNfind(nam$,ide%,idtr%)
+
+   REM Is there a local definition?
+
+   IF sid%=0 sid%=FNinsert(nam$,ide%,idtr%):sid%!type=0
+
+  ELSE
+
+   sid%=FNnew(idtr%):sid%!type=0
+
+   REM We want a nameless definition. Note that this will float free and
+   REM  only be tied to a/some variable(s) (or struct/union etc)
+
+  ENDIF
+
+  REM Set size
+  sid%!size=off%
+
+  REM If there s a pointer-to node, then this is a redefinition.
+
+  IF sid%!type<>0 THEN
+   PROCerror("WARNING - Discarding redefinition of struct "+nam$+".")
+  ELSE
+   sid%!type=top%
+
+   REM do size of struct/union differently
+
+   IF stru% sid%!size=off% ELSE sid%!size=max%
+
+   sid%?nodt=6+stru%
+
+   REM Make pointer-to node.
+
+   lit%=FNnew(idtr%)
+   lit%!name=0:lit%!type=sid%
+   lit%!locn=1:lit%!size=4
+   lit%?nodt=4:sid%!locn=lit%
+
+   REM Defined struct with struct* pointed to by locn.
+
+  ENDIF
+
+  type%=sid%
+  tok$=FNtoken:REM take us into next bit (past '}' or ident).
+
+ ELSE
+
+  REM This bit is for when there's no definition (just find for the name)
+
+  IF nam$="" THEN
+
+   REM Someone has tried 'struct ;' or (struct)
+
+   PROCerror("Fishy - Unnamed struct with no definition!")
+   type%=VoidType%
+  ELSE
+   type%=FNiseek(nam$,ide%)
+
+   REM Note this will never be zero (but . . .)
+
+   IF type%=0 PROCerror("AAARGH! - An infeasable thing has just occurred. Returning void."):type%=VoidType%
+
+  ENDIF
+ ENDIF
+ REM Hurrah! Ended definition of struct (pointer in type%)
+
+ WHEN "kwd.enum":
+  LOCAL val%,en%,tmp$,nam$
+  val%=0:REM First thang's value
+
+  REM Enums are strange. The name of the enum is special, but the list
+  REM  members seem to be treated like local integer definitions.
+  REM  I'm going to identify enum with int,
+  REM  but declare the list members as enum members (nodt=8)
+
+  tok$=FNtoken:REM Skip kwd.enum
+
+  IF DEBUG AND 4 PROCdebug:PRINT"Adt: Enum name possibly "+tok$
+
+  type%=IntType%
+
+  IF LEFT$(tok$,3)="idt" THEN
+   nam$=MID$(tok$,5)+"E"
+   tok$=FNtoken
+   IF INSTR(" ({[;",RIGHT$(tok$))>1 THEN
+
+    REM Set up an enum base type.
+
+    en%=FNinsert(nam$,ide%,idtr%)
+    IF en%=0 PROCerror("Warning - Redefinition of enum '"+nam$+"'. (Using both definitions!"):ELSE en%?nodt=7:en%!type=type%
+   ELSE
+    IF FNiseek(nam$,ide%)=0 PROCerror("Warning - Enum '"+nam$+"' not defined. Using int like I do anyway.")
+   ENDIF
+  ENDIF
+
+  REM Do the definition
+
+  IF INSTR(" ({[",RIGHT$(tok$))>1 THEN
+   IF INSTR(" ([",RIGHT$(tok$))>1 PROCerror("Warning - Enum definitions use {} delimiters")
+   REPEAT
+
+    REM Get tag name
+
+    tok$=FNtoken
+    IF LEFT$(tok$,3)<>"idt" THEN
+     PROCerror("Error - Bad identifier '"+tok$+"' in enum.")
+    ELSE
+     IF FNfind(MID$(tok$,5)+"I",ide%,idtr%)<>0 THEN
+      PROCerror("Error - Enum identifier '"+MID$(tok$,5)+"' previously defined.")
+      val%+=1
+     ELSE
+
+      REM Get new value (parse for =num)
+
+      tmp$=FNtoken
+      IF tmp$="syb.=" OR LEFT$(tmp$,3)="num" THEN
+       IF tmp$="syb.=" tmp$=FNtoken:ELSEPROCerror("Warning - Inserted missing = in enum definition")
+       IF LEFT$(tmp$,3)<>"num" PROCerror("Warning - Missing number in enum definition."):ELSEval%=EVALMID$(tmp$,5)
+      ELSE
+       PROCtokback(tmp$)
+      ENDIF
+
+      REM Make the entry
+
+      lis%=FNinsert(MID$(tok$,5)+"I",ide%,idtr%)
+      lis%?nodt=8:lis%!size=val%
+      lis%!locn=val%:lis%!type=IntType%
+      val%+=1:REM renew tag values
+      tok$=FNtoken
+     ENDIF
+    ENDIF
+
+    REM Skip anything odd
+
+    WHILE INSTR(" ,)]};",RIGHT$(tok$))<2
+     tok$=FNtoken
+     PROCerror("Warning - Skipping '"+tok$+"' in enum definition")
+    ENDWHILE
+   UNTIL tok$<>"syb.,"
+   IF INSTR(" )];",RIGHT$(tok$))>1 PROCerror("Warning - "+RIGHT$(tok$)+" used to close enum definition.")
+   tok$=FNtoken
+  ENDIF
+  REM Finished enum too...
+
+ OTHERWISE:
+
+  REM We get adjectives and atomic (and typedef'd) types here.
+  REM  WHEN 'adjectives', eg const, volatile etc,
+  REM   look along until we come across struct or atomic, building a
+  REM   flag block which we insert into a dummy node and link that onto
+  REM   the type.
+
+  REM Note: Adjectives before the type are type-linked. Afterwards, they
+  REM       are identifier-linked. eg:
+  REM   const char a,b; /* a,b are const chars */
+  REM   char const a,b; /* a is const char, b is char */
+
+  REM If I can be bothered and it doesn't contradict ANSI. (I think
+  REM  they are all identifier linked).
+
+  REM
+  REM
+  REM THIS IS ONE OF THE BITS I HAVEN'T FINISHED (adjectives are ignored)
+  REM  (It's also a bit messy)
+  REM
+  REM
+
+  LOCAL flag%,link%,out%:flag%=0:out%=0:link%=0
+
+  REPEAT
+
+   REM we get out of this bit when we come across a real type or an ident
+
+   REM Things that should not exist on their own produce ints presumaby.
+   REM  ie out%=1 types
+
+   CASE tok$ OF
+    WHEN "kwd.auto","kwd.const","kwd.extern","kwd.register","kwd.static","kwd.volatile":out%=1
+    WHEN "kwd.double","kwd.long","kwd.short","kwd.signed","kwd.unsigned":out%=2
+    OTHERWISE:out%+=3
+   ENDCASE
+   IF DEBUG AND 4 PROCdebug:PRINT"Adt: Adjective search: Found ";tok$
+   IF out%<=2 tok$=FNtoken
+  UNTIL out%>2
+
+  CASE tok$ OF
+   WHEN "kwd.struct","kwd.union","kwd.enum":
+    type%=FNbasetype(ide%)
+    REM And slap the flags on.
+
+   WHEN "kwd.char","kwd.int","kwd.void","kwd.float","kwd.double":
+    type%=FNfind(MID$(tok$,5)+"I",glid%,idtr%)
+
+    IF DEBUG AND 4 PROCdebug:PRINT"Adt: Found base type ";tok$;" Remember, no adjectives yet"
+    tok$=FNtoken
+    REM Have dealt with int, char etc. * remember for out%=5,4 below.
+
+    REM ... and slap the flags on.
+
+   OTHERWISE:
+   IF out%=3 THEN
+
+    IF DEBUG AND 4 PROCdebug:PRINT"Adt: Found possible typedef '"+tok$+"'"
+
+    type%=FNiseek(MID$(tok$,5)+"I",ide%)
+
+    IF type%=0 PROCerror("Error - Type '"+tok$+"' undefined. (Returning int.)"):type%=IntType%
+
+    IF type%?nodt<>1 PROCerror("Error - '"+tok$+"' not a typedef. (returning int.)"):type%=IntType%
+
+    REM A little fix which, if a typedef points to a struct/union,
+    REM  makes it explicitly so.
+
+    IF type%!type>&8000 IF (?(type%!type+nodt)=5 OR ?(type%!type+nodt)=6) type%=type%!type
+
+    tok$=FNtoken
+
+   ELSE
+    IF out%=5 THEN
+     REM Implied long, short int, or float and possible linkage (extern)
+     REM Not being dealt with yet, but do it from flag% (when operational)
+     REM Note that tok$ now holds the first token for the id list.
+    ELSE
+     IF out%=4 THEN
+      REM This is linkage extern/static.
+     ENDIF
+     type%=FNiseek(MID$(tok$,5)+"I",ide%)
+    ENDIF
+   ENDIF
+  ENDCASE
+ ENDCASE
+:=type%
+
+***************************
+*
+*  Size returns the size of a type.
+*
+***************************
+
+DEFFNsize(nod%)
+ LOCALsiz%
+ IF nod%<&8000 THEN
+  CASE nod% OF
+   WHEN 0: siz%=0
+   WHEN 1: siz%=1
+   WHEN 2: siz%=5
+   WHEN 3: siz%=4
+   OTHERWISE: PROCerror("Internal - Size found odd base type")
+  ENDCASE
+ ELSE
+  CASE nod%?nodt OF
+   WHEN 1:IF nod%!type<&8000 THEN
+           siz%=nod%!size
+          ELSE
+           siz%=FNsize(nod%!type)
+          ENDIF
+   WHEN 2:siz%=0
+   WHEN 3:siz%=FNsize(nod%!type)
+   WHEN 4:
+    CASE nod%!locn AND 7 OF
+     WHEN 0:siz%=nod%!type
+            IF siz%>&8000 THEN
+             siz%=FNsize(siz%)
+            ELSE
+             CASE siz% OF
+              WHEN 0:siz%=0
+              WHEN 1:siz%=1
+              WHEN 2:siz%=5
+              WHEN 3:siz%=4
+              OTHERWISE:PROCerror("INTERNAL - Strange base type ("+STR%siz%+")")
+             ENDCASE
+            ENDIF
+     WHEN 1:siz%=4
+     WHEN 2:siz%=(nod%!size)*FNsize(nod%!type)
+     WHEN 3:siz%=0
+     OTHERWISE:PROCerror("INTERNAL - Strange type modifier ("+STR$(nod%!locn)+")")
+    ENDCASE
+   WHEN 5,6:siz%=nod%!size
+   WHEN 7:siz%=4
+   WHEN 8:siz%=4:PROCerror("Warning - Size request on enum field")
+   OTHERWISE:PROCerror("INTERNAL - Strange nodt ("+STR$(nod%?nodt)+")")
+  ENDCASE
+ ENDIF
+:=siz%
+
+***************************
+*
+*  FNdecla - Type modifier and identifier parser
+*
+***************************
+
+REM Return node-chain terminating with base type typ%, the chain
+REM  modifies the base type to reflect the various modifiers given.
+REM   (eg **fred[20]())
+REM
+REM Main problem: If we have a (, could be a fn defn or an open brace.
+
+REM If we are going up, (ie have passed the identifier slot), an open
+REM  bracket will always be function declaration.
+REM If down, check the next thing:
+REM  A close bracket indicates a void function (or old style prototype)
+REM  A * or [ indicate a bracket (latter also sets up%).
+REM  A /type/ ident says the start of a new type param list (=fn)
+REM  A /standard/ ident,
+REM   if idnam$="" and not up%, it is the ident name. Set up%.
+REM                           (The bracket was not a function thing.)
+REM   else this is the start of an old-style (yukky) function.
+REM
+REM Note that since this bit of code might find its way into the
+REM  typecasting side of things, the bracket matching must be accurate.
+
+REM Note that function definition was moved out of here and into lists()
+REM  because self prototyping (C's recursion) was fouled up, and
+REM  because definition is initialization, and that's one of list's jobs
+
+DEFFNdecla(typ%,RETURN idnam$,ide%)
+LOCALtop%,this%,up%,nu%,tmp$,tokused%,exit%,round%,proto%
+
+top%=FNnew(idtr%):this%=top%:REM Make dummy node (gets lost at end)
+top%?nodt=4:top%!type=0
+top%!locn=0:top%!size=0
+top%!name=0
+up%=FALSE:REM We can only accept * when up% is false. up% becomes true
+          REM  when we run into any ),[,ident or function declaration.
+exit%=FALSE:round%=0:idnam$=""
+REPEAT
+
+ tokused%=FALSE
+
+ IF LEFT$(tok$,3)="idt" THEN
+
+  REM Found ident. Either the modified type's ident or old style
+  REM  function def'n (not supported)
+
+  IF DEBUG AND 4 PROCdebug:PRINT"Decla: Found ident '"+tok$+"'"
+
+  IF idnam$="" THEN
+
+   REM Is the ident name for the modified basetype
+
+   idnam$=MID$(tok$,5)+"I"
+
+   REM We'll put the base type info in at the end of the algorithm.
+
+   IF DEBUG AND 4 PROCdebug:PRINT"Decla: '"+idnam$+"' is the ident name for the declarator."
+
+   tok$=FNtoken
+   tokused%=FALSE:REM Slight hack to force declarations starting with
+                  REM  ident to investigate further info. Stops a
+                  REM  premature this=top termination.
+  ELSE
+   PROCerror("Error - Found spare identifier ("+tok$+"). Skipping to ; or ,.")
+   PROCsemicommsk:this%=top%
+   tokused%=FALSE
+  ENDIF
+ ENDIF
+
+ IF tok$="syb.)" THEN
+
+  REM Drop to the next bracket node and remove it.
+
+  WHILE this%!locn<>4 AND this%!type<>0 this%=this%!type:ENDWHILE
+
+  IF this%!locn=4 THEN
+
+   REM Kill off bracket node
+
+   up%=this%!name:nu%=this%!type:up%!type=nu%
+   IF nu%<>0 nu%!name=up%
+   PROClose(this%,idtr%):this%=up%:up%=TRUE
+
+   IF DEBUG AND 4 PROCdebug:PRINT"Decla: Removed bracket node due to "+tok$
+   tokused%=FALSE:tok$=FNtoken
+  ELSE
+
+   REM ) found, and no ( to close in chain, so exit with it.
+
+   IF DEBUG AND 4 PROCdebug:PRINT"Decla: Exitting due to ')'."
+   tokused%=FALSE:exit%=TRUE
+  ENDIF
+ ENDIF
+
+
+ IF tok$="syb.*" THEN
+  IF DEBUG AND 4 PROCdebug:PRINT"Decla: Found *"
+  tokused%=TRUE
+  IF up% THEN
+   PROCerror("Error - Ignoring * on the 'right' of a declarator. Check ()s.")
+  ELSE
+
+   REM Insert pointer node...
+
+   nu%=FNnew(idtr%):nu%!type=this%!type
+   IF !((nu%!type)+name)=this% !((nu%!type)+name)=nu%
+
+   this%!type=nu%
+
+   nu%!name=this%:nu%!locn=1:nu%!size=4:nu%?nodt=4
+
+   IF DEBUG AND 4 PROCdebug:PRINT"Decla: Generated new pointer node"
+  ENDIF
+ ENDIF
+
+ REM Decide whether ( is for a function or a bracket
+
+ IF tok$="syb.(" AND NOT up% THEN
+
+  IF DEBUG AND 4 PROCdebug:PRINT"Decla: Found open bracket. ";
+
+  tmp$=FNtoken:PROCtokback(tmp$)
+
+  IF tmp$="syb.[" OR tmp$="syb.*" OR tmp$="syb.(" tok$="bra.(":IF DEBUG AND 4 PROCdebug:PRINT"Is a delimiter due to next token ("+tmp$+")"
+
+  IF LEFT$(tmp$,3)="idt" AND FNget(FNiseek(tmp$+"I",ide%),"nodt",idtr%)<>1 AND idnam$="" tok$="bra.(":IF DEBUG AND 4 PROCdebug:PRINT"Is a delimiter due to next token ("+tok$+")"
+
+  IF tok$<>"bra.(" AND DEBUG AND 4 PROCbot:PRINT"Is a function thing."
+
+ ENDIF
+
+ IF tok$="bra.(" THEN
+
+  REM Place a bracket node; this will be removed on the way out
+
+  nu%=FNnew(idtr%):nu%!type=this%!type
+  IF !((nu%!type)+name)=this% !((nu%!type)+name)=nu%
+
+  this%!type=nu%:nu%!name=this%:nu%!locn=4:nu%?nodt=4
+
+  IF DEBUG AND 4 PROCdebug:PRINT"Decla: Placed bracket node"
+
+  tokused%=TRUE
+ ENDIF
+
+ IF tok$="syb.(" THEN
+  IF DEBUG AND 4 PROCdebug:PRINT"Decla: Found function declaration"
+
+  IF idnam$="" THEN
+   PROCerror("WARNING - ADT functions not yet implemented.")
+  ELSE
+   nu%=FNfind(idnam$,ide%,idtr%)
+
+   IF nu%<>0 `=nu%?nodt<>2:ELSE`=FALSE
+
+   IF ` THEN
+    PROCerror("WARNING - Identifier predeclared and not of a function.")
+   ELSE
+
+    REM Sort out a function prototype
+
+    tok$=FNtoken
+
+    proto%=FNprototype(idnam$,nu%,this%,ide%)
+
+    REM exit this loop if the prototype has variables (proto%<0)
+
+    IF proto%<0 exit%=-1:proto%=ABSproto%
+
+    IF DEBUG AND 4 PROCdebug:PRINT"Decla: exit%="exit%;" proto%=";proto%
+
+    REM Init this () node...
+
+    nu%=FNnew(idtr%):nu%!name=this%
+    nu%!type=this%!type
+    this%!type=nu%:this%!size=proto%
+    IF !((nu%!type)+name)=this% !((nu%!type)+name)=nu%
+
+    REM Bugfix (& for []), doesn't overwrite names of (eg) int by linking
+    REM  to it. (The IF ... =this% wasn't there)
+
+    nu%!locn=3:nu%?nodt=4
+    this%=nu%:nu%!size=proto%
+
+    IF DEBUG AND 4 PROCdebug:PRINT"Decla: Inserted function node."
+
+   ENDIF
+  ENDIF
+
+  tokused%=FALSE
+
+  up%=TRUE
+
+ ENDIF
+
+REM I THINK THERE MIGHT BE A MISTAKE IN A !((x!x)+x)=x SOMEWHERE ABOVE
+
+ IF tok$="syb.[" THEN
+  IF DEBUG AND 4 PROCdebug:PRINT"Decla: Inserting an array node.";
+
+  tok$=FNtoken:round%=0
+
+  nu%=FNnew(idtr%):nu%!name=this%:nu%!type=this%!type:this%!type=nu%
+
+  IF !(nu%!type+name)=this% !(nu%!type+name)=nu%
+
+  nu%!locn=2:nu%?nodt=4:this%=nu%
+
+  IF LEFT$(tok$,3)="num" THEN
+   nu%!size=VALMID$(tok$,5)
+   IF DEBUG AND 4 PROCdebug:PRINT"(array length=";tok$;")"
+   tok$=FNtoken:round%=0
+  ELSE
+   nu%!size=0
+   IF DEBUG AND 4 PROCdebug:PRINT"(No array length given)"
+  ENDIF
+
+  IF tok$<>"syb.]" PROCerror("Error - Expected a ] here. Found '"+tok$+"' .")
+
+  REM Maybe here allow [A,B]. Warn but still convert to [A][B]
+
+  REM This would be easy (tokused%=FALSE, tok$="syb.[" about here),
+  REM  but would need support in the compiler. (and ANSI warnings)
+
+  tokused%=tok$="syb.]"
+
+ ENDIF
+
+ REM If we have been around before and the token is still not used,
+ REM  discard it and get a new one.
+
+ IF LEFT$(tok$,3)="kwd" PROCerror("Warning - Missing ; inserted. (Or identifier is a reserved word.)"):round%=1:PROCtokback(tok$):tok$="syb.;":tokused%=FALSE
+ IF round%>2 AND LEFT$(tok$,3)<>"eof" PROCerror("Warning - Discarding misplaced token '"+tok$+"'"):tokused%=TRUE
+ round%+=1
+
+ IF tokused% tok$=FNtoken:round%=0
+
+ UNTIL tok$="syb.;" OR tok$="syb.," OR tok$="syb.=" OR tok$="syb.{" OR LEFT$(tok$,3)="eof" OR exit%
+
+ REM Modification here for assembly procedure entry code spec.
+ REM
+ REM Form: int double(int z) [ Add R0,R0,R0: Mov pc,lr: ]
+ REM
+ REM or  : int foo(int a, int b) [\ no APCS needed] { a=2*b;/* etc */ }
+ REM                             [\ put result in R0: Mov pc,lr:];
+ REM
+ REM _Does_ exit on variabled fn prototype, but also if int x =
+
+ REM Note that this allows int foo()=3, but you're silly if you do that.
+
+ IF DEBUG AND 4 AND NOT exit% PROCdebug:PRINT"Decla: Stopped due to '"+tok$+"'"
+ IF DEBUG AND 4 AND exit% PROCdebug:PRINT"Decla: Stopped cos we hit the top or prototype had variables."
+
+ REM Find the bottom of the chain
+
+ WHILE FNget(this%,"type",idtr%)<>0
+  this%=FNget(this%,"type",idtr%)
+ ENDWHILE
+
+ REM Link the base type onto it, or the 'pointer-to-base-type' node
+
+ IF FNget(this%,"nodt",idtr%)=4 AND FNget(this%,"locn",idtr%)=1 AND FNget(typ%,"locn",idtr%)>&8000 THEN
+
+  REM If the lowest node is a pointer node, loose it and use the
+  REM  base type's version.
+
+  !((this%!name)+type)=typ%!locn
+
+  PROClose(this%,idtr%)
+  IF DEBUG AND 4 PROCdebug:PRINT"Using predefined pointer node."
+ ELSE
+  this%!type=typ%:REM Link in base type...
+ ENDIF
+
+ REM lose top dummy node
+
+ this%=top%!type:PROClose(top%,idtr%):top%=this%
+
+ IF DEBUG AND 4 PROCbot:PRINT"Decla: Returning size = ";FNget(this%,"size",idtr%)
+
+:=this%
+
+***************************
+*
+*  FNprototype - Yukky prototype definer and checker
+*
+***************************
+
+* Returns a pointer to the prototype definition, but negated if
+*  id names appear in the prototype.
+
+* I really don't like this code. It has a bad 'feel'.
+
+* Guess what? I do believe it's bugged...
+
+DEFFNprototype(fnnam$,nu%,this%,ide%)
+LOCAL idnam$,pos%,proto%,prpt%,typ%,tmp%,exit%
+IF nu% proto%=FNget(nu%,"size",idtr%):ELSEproto%=0
+exit%=proto%
+
+REM return exit<0 if even one function decl has a param name
+
+REM Looking for a new/adt function declaration (possibly with definition).
+REM Match with:
+REM    List of declarations (fn def) or list of types (prototype).
+REM Link onto this%, this%->size=pointer to param list
+REM  nu% is the function id$ name/node; ide%=id tree
+REM  nu%=0 => unprototyped. <>0 => check prototyping with declarations
+REM  Both of these may involve inserting names into the structure
+
+ WHILE tok$<>"syb.)" AND tok$<>"syb.{" AND LEFT$(tok$,3)<>"eof"
+  IF nu%=0 THEN
+
+   REM nu%=0 -> no prior definition
+
+   REM Read in types and possibly identifiers. Put them into a node
+   REM  and link it into the list. The list gets returned.
+
+   tmp%=FNnew(idtr%):tmp%!right=0
+   IF proto%=0 THEN
+    proto%=tmp%:prpt%=tmp%:exit%=tmp%
+   ELSE
+    prpt%!right=tmp%:prpt%=tmp%
+   ENDIF
+   typ%=FNdecla(FNbasetype(ide%),idnam$,ide%):prpt%!type=typ%
+   IF idnam$<>"" THEN
+    DIM typ% LENidnam$
+    $typ%=idnam$
+    prpt%!name=typ%
+    exit%=-ABSexit%
+   ELSE
+    prpt%!name=0
+   ENDIF
+  ELSE
+
+   REM Read in types and possibly identifiers. Check them against
+   REM  the appropriate links in the list (item by item, going down
+   REM  until they match exactly (address=address) or the new version
+   REM  is of a typedef. If they match, ok it, if not, produce an error.
+   REM  The new names are preferred to the old ones.
+
+   typ%=FNdecla(FNbasetype(ide%),idnam$,ide%)
+   IF idnam$<>"" THEN
+    DIM tmp% LENidnam$:$tmp%=idnam$
+    PROCputZ(tmp%,proto%,"name",idtr%)
+    exit%=-ABSexit%
+   ENDIF
+   prpt%=FNget(proto%,"type",idtr%)
+   REM Test typ% against prpt%, killing typ%
+   pos%=0:REM No mismatch yet
+   WHILE typ%>&8000
+    IF NOT pos% THEN
+     IF typ%<>prpt% THEN
+      IF FNget(typ%,"nodt",idtr%)=1 THEN
+       pos%=-1
+       IF FNget(prpt%,"nodt",idtr%)=1 THEN
+        IF FNget(typ%,"locn",idtr%)<>FNget(prpt%,"locn",idtr%) PROCerror("Warning - ProtoType mismatch base type")
+       ELSE
+        PROCerror("Warning - Older prototype more complex")
+       ENDIF
+       typ%=0
+      ELSE
+       IF DEBUG AND 4 PROCdebug:PRINT"prototype: new node nodt should =4. Is ";FNget(typ%,"nodt",idtr%)":";FNget(typ%,"locn",idtr%)" (Old node:"FNget(prpt%,"nodt",idtr%)":";FNget(prpt%,"locn",idtr%);")"
+
+       IF FNget(typ%,"locn",idtr%)<>FNget(prpt%,"locn",idtr%) PROCerror("Warning - ProtoType modifier mismatch")
+      ENDIF
+     ENDIF
+    ENDIF
+    IF prpt%<&8000 prpt%=FNget(prpt%,"type",idtr%)
+    IF typ%<>0 THEN
+     tmp%=FNget(typ%,"type",idtr%)
+     IF DEBUG AND 2 PROCbot:PRINT"Prototype: int:"IntType%" Have:"typ%
+     IF ( (typ%?nodt=4 AND typ%!locn=1) AND (tmp%?nodt=6 OR tmp%?nodt=5 OR tmp%?nodt=1) ) OR (typ%?nodt=6 OR typ%?nodt=5 OR typ%?nodt=1) typ%=0:ELSEPROClose(typ%,idtr%):typ%=tmp%
+    ENDIF
+   ENDWHILE
+   IF proto%>&8000 proto%=FNget(proto%,"right",idtr%)
+  ENDIF
+  IF tok$<>"syb.)" AND tok$<>"syb.{" AND LEFT$(tok$,3)<>"eof" PROCwant("syb.,","Warning - Expected ',' between parameters.")
+ ENDWHILE
+
+ IF DEBUG AND 4 PROCdebug:PRINT"prototype: Want ). got ";tok$
+ PROCwant("syb.)","WARNING - Error in parameter declarations.")
+
+:=exit%
+
+**************************
+***************************
+**                         *
+** Compilation              *
+**                         *
+***************************
+**************************
+
+***************************
+*
+*  FNfngen - Produce machine code for the given function.
+*
+***************************
+
+* Because I haven't banned it, functions can have local functions.
+*  this won't work properly (like Pascal) if used, but if I ever
+*  re-front this to parse Pascal, they will...
+
+DEFPROCfngen(fnnam$,top%)
+LOCAL this%,next%,stack%,tmp%,tp%,tem%,swi$
+
+PROCdatadump:REM Dump any data from last time (globals etc)
+
+PROCnewfn:REM Tell code output there's a new function
+stack%=0:STATDEP=0
+
+REM Entry stack: <old fp> [STUFF]
+REM                       [pushed params > 5]
+REM              <old sp>
+
+REM Post entry : <old fp> [STUFF]
+REM                       [pushed params > 5]
+REM      <newfp>,<old sp> [pushed params <=4]
+REM                       [pushed pc (R15) Makes a stack backtrace struct
+REM                               lr (R14)
+REM                               ip (R12=old sp)
+REM              <new sp>         fp (R11)
+REM                               (some) variable regs (R4-R9) ]
+REM
+REM Note, lr is used to restore flag values with
+REM  a LDMFD sp!,{...,pc}^ since the ^ forces a complete load into
+REM  pc, including the address and the status registers,
+
+REM Output full APCS procedure header
+
+PROCopcode("FNlabel("+fnnam$+")","")
+PROCopcode("Mov","ip,R13")
+
+PROCopcode("StmFD","R13!,{R0-R3}")
+PROCopcode("StmFD","R13!,{R4-R9,fp,ip,lr,pc}")
+PROCopcode("Sub","fp,ip,#20"):REM fp points to R4
+PROCopcode("Cmp","R13,sl"):REM Is sp lower than StackLowWaterMark+256?
+
+IF extref%=1 THEN
+ PROCopcode("BLLT","`stackoverf"):REM BL to stack extend code if so.
+ELSE
+ PROCopcode("DCD","FNiden(0,0,zero) \ Stack overfl"):REM External BLLT
+ENDIF
+
+REM Dismantle the tree as we go through!
+REM  THIS IS SAFE ONLY BECAUSE THE TREE IS A TREE, NOT A D.A.G.
+
+REM > INSERT MORE OBJECT CODE COMMENTS. (like which node produced what)
+
+this%=top%
+REPEAT
+
+ IF DEBUG AND 1 PROCdebug:PRINT"fngen: (";this%;") type is ";FNget(this%,"type",stmt%);" next is ";FNget(this%,"next",stmt%)
+
+ CASE this%?type OF
+
+  WHEN 132,142:
+
+   IF DEBUG AND 1 PROCdebug:PRINT"fngen: local off:";FNget(this%,"third",stmt%);" parn (";FNget(this%,"second",stmt%);") off:";FNget(FNget(this%,"second",stmt%),"third",stmt%)
+
+   REM Code an add/subtract to/from the stack pointer for local vars
+   REM  (if it isn't an sp+=0 or sp-=0)
+
+   REM If this->fourth=0, we are here for the second time, so remove
+   REM  the local space and go to the next stmt list after the {}.
+   REM  If <>0, make the local space and go into the subblock command
+   REM  list
+
+   IF this%!fourth<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen:{*}"
+
+    IF this%!second tmp%=(this%!third)-!((this%!second)+third) ELSE tmp%=this%!third
+    PROCoutcode("\ Start of sub block")
+    IF tmp%<>0 PROCopcode("Sub","R13,R13,#"+STR$(tmp%))
+    stack%+=tmp%
+    next%=this%!fourth
+    this%!fourth=0
+   ELSE
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen:{} *"
+    REM This {} dealt with.
+
+    IF this%!second tmp%=(this%!third)-!((this%!second)+third) ELSE tmp%=this%!third
+    IF tmp%<>0 PROCopcode("Add","R13,R13,#"+STR$(tmp%))
+    PROCoutcode("\ End of sub block")
+    stack%-=tmp%
+
+    next%=this%!next
+    this%!next=0
+    this%?type=0:REM Mark this as totally done.
+
+    !((this%!first)+left)=0
+    PROCaxe(this%!first,idtr%)
+       REM kill local (ONLY) idtr
+   ENDIF
+
+  WHEN 128:
+
+   REM for statement
+
+   IF this%!fourth<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: for (*) {*}"
+
+    PROCoutcode("\ for (*;;){}")
+
+    dummy%=this%!first
+    IF dummy% dummy%=FNexprgen(4,stack%,-2,dummy%)
+
+    PROClbcode("For"+STR$~this%,"\ for (;*;){}","")
+
+    dummy%=this%!second
+    IF dummy% THEN
+     dummy%=FNexprgen(4,stack%,TRUE,dummy%)
+     PROCopcode("Beq","EndFor"+STR$~this%+FNlbo):REM Cond=FALSE -> endfor
+    ENDIF
+
+    PROCoutcode("\ for (;;){*}")
+    next%=this%!fourth
+    this%!fourth=0:REM Let loop generate statements
+
+   ELSE
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: for (;;*) {} *"
+
+    PROCoutcode("\ for (;;*){}")
+    dummy%=this%!third
+    IF dummy% dummy%=FNexprgen(4,stack%,-2,dummy%)
+
+    PROCopcode("B","For"+STR$~this%+FNlbo):REM Incr done, branch to test
+    PROClbcode("EndFor"+STR$~this%,"",""):REM Mark endloop
+
+    PROCoutcode("\ for (;;){}*")
+    next%=this%!next
+    this%!next=0
+    this%?type=0:REM Drop through to next stmts
+   ENDIF
+
+  WHEN 129:
+
+   REM if () {}
+
+   IF this%!second<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: if (*) {*}"
+
+    PROCoutcode("\ If (*) {}")
+    dummy%=FNexprgen(4,stack%,TRUE,FNget(this%,"first",stmt%))
+    PROCopcode("Beq","EndIf"+STR$~this%+FNlbo)
+
+    PROCoutcode("\ If () {*}")
+    next%=this%!second
+    this%!second=0
+
+   ELSE
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: if () {} *"
+    PROClbcode("EndIf"+STR$~this%,"","")
+    next%=this%!next
+    this%!next=0
+    this%?type=0:REM do this->next
+   ENDIF
+
+  WHEN 130:
+
+   IF this%!second<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: while (*) {*}"
+
+    PROClbcode("While"+STR$~this%,"","")
+    dummy%=FNexprgen(4,stack%,TRUE,FNget(this%,"first",stmt%))
+    PROCopcode("Beq","EndWhile"+STR$~this%+FNlbo)
+
+    next%=this%!second
+    this%!second=0:REM Generate loop code
+   ELSE
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: while () {} *"
+
+    PROCopcode("B","While"+STR$~this%+FNlbo)
+
+    PROClbcode("EndWhile"+STR$~this%,"","")
+
+    next%=this%!next
+    this%!next=0
+    this%?type=0:REM do this->next
+   ENDIF
+
+  WHEN 131,143:
+
+   IF this%!first<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: do {*} while ()"
+
+    PROClbcode("Do"+STR$~this%,"","")
+    next%=this%!first
+    this%!first=0
+   ELSE
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: do {} while (*) *"
+
+    PROCoutcode("\ (do {^^^}) while (*) "+STR$this%)
+    dummy%=FNexprgen(4,stack%,TRUE,FNget(this%,"second",stmt%))
+    PROCopcode("Bne","Do"+STR$~this%+FNlbo)
+    next%=this%!next
+    this%!next=0
+    this%?type=0
+   ENDIF
+
+  REM  132: Subblock done
+
+  WHEN 133: IF DEBUG AND 1 PROCbot:PRINT"fngen: return (*) *"
+
+   PROCoutcode("\ return (*)")
+   IF FNget(this%,"first",stmt%)<>0 dummy%=FNexprgen(4,stack%,0,this%!first)
+   PROCopcode("LdmDB","fp,{R4-R9,fp,R13,pc}^ \ Return()")
+   PROCdatadump
+   next%=this%!next
+   this%!next=0
+   this%?type=0
+
+  WHEN 134: IF DEBUG AND 1 PROCbot:PRINT"fngen: switch () {}"
+
+  REM This will need to scan the subblock for CASE and DEFAULT.
+  REM  it will also have to superceed 132,142 for its subblock.
+
+  REM May be best with: B overtabXXXX: .tablXXXX DCD val1:DCD case1 etc
+  REM                   .overtabXXXX (initially) linear search of table
+  REM                   leading to LDR pc,[Rn]
+
+  REM Or not; Could have case: producing IF () GOTO ...
+  REM          this is bad with nested things. Go for table.
+  REM          best gen purpose. No worries about speed atm.
+
+  REM I'll have to set up a whole new structure to cope with break,
+  REM  continue etc. Bleugh.
+
+   PROCerror("INTERNAL - 'switch' not yet compileable (ignored).")
+
+   PROCoutcode("\ !!! IGNORED 'SWITCH'.")
+
+   next%=this%!next
+   this%!next=0
+   this%?type=0
+
+  REM 135: Gotos not implemented. Will have to deal with subblocks.
+  REM      Basically just alter sp by an appropriate offset,
+  REM      and then B gotolabel
+
+  WHEN 136: IF DEBUG AND 1 PROCbot:PRINT"fngen: Continue."
+
+     REM  Aaargh! Dependant on immediately enclosing structure.
+
+   PROCerror("INTERNAL - 'continue' not yet compileable (ignored).")
+
+   PROCoutcode("\ !!! IGNORED 'CONTINUE'.")
+
+   next%=FNget(this%,"next",stmt%)
+   PROCputZ(0,this%,"next",stmt%)
+   PROCputB(0,this%,"type",stmt%)
+
+  WHEN 137: IF DEBUG AND 1 PROCbot:PRINT"fngen: default"
+
+     REM Error checking requires similar to continue
+
+   PROCoutcode("\ default")
+
+   next%=FNget(this%,"next",stmt%)
+   PROCputZ(0,this%,"next",stmt%)
+   PROCputB(0,this%,"type",stmt%)
+
+  WHEN 138: IF DEBUG AND 1 PROCbot:PRINT"fngen: break"
+
+     REM requires similar to continue
+
+   PROCerror("INTERNAL - 'break' not yet compileable (ignored).")
+
+   PROCoutcode("\ break TO BE ANNOUNCED")
+
+   next%=FNget(this%,"next",stmt%)
+   PROCputZ(0,this%,"next",stmt%)
+   PROCputB(0,this%,"type",stmt%)
+
+  WHEN 139: IF DEBUG AND 1 PROCbot:PRINT"fngen: case nnnn"
+
+   REM Not that it's really worth it without switch, but . . .
+
+   next%=FNget(this%,"first",stnd%)
+   IF 31<next% AND next%<127 THEN
+    PROCoutcode("\ case "+STR$next%+" '"+CHR$next%+"'")
+   ELSE
+    PROCoutcode("\ case "+STR$next%)
+   ENDIF
+
+   PROClbcode("case"+STR$~this%,"","")
+
+   next%=FNget(this%,"next",stmt%)
+   PROCputZ(0,this%,"next",stmt%)
+   PROCputB(0,this%,"type",stmt%)
+
+  WHEN 140:IF DEBUG AND 1 PROCbot:PRINT"fngen: [expression?];"
+
+   IF this%!first<>0 THEN
+    dummy%=FNexprgen(4,stack%,-2,this%!first)
+    this%!first=0
+   ENDIF
+   next%=this%!next
+   this%!next=0
+   this%?type=0
+
+  WHEN 141:
+
+   IF this%!second<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: if (*) {*} else {}"
+
+    PROCoutcode("\ If (*) {} else {}")
+    dummy%=FNexprgen(4,stack%,TRUE,this%!first)
+    PROCopcode("Beq","Else"+STR$~this%+FNlbo)
+
+    PROCoutcode("\ If () {*} else {}")
+    next%=this%!second
+    this%!second=0:REM Do the 'then' bit
+   ELSE
+    IF this%!third<>0 THEN
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: if () {} else {*}"
+
+     PROCopcode("B","EndIf"+STR$~this%+FNlbo)  :REM Else code
+     PROClbcode("Else"+STR$~this%,"","")
+
+     next%=this%!third:REM Code the 'else' block
+     this%!third=0
+    ELSE
+
+     IF DEBUG AND 1 PROCbot:PRINT"fngen: if () {} else {} *"
+
+     PROClbcode("EndIf"+STR$~this%,"","")
+     next%=this%!next
+     this%!next=0
+     this%?type=0:REM Do next
+    ENDIF
+   ENDIF
+
+  REM  142: subblock done. (see 132)
+
+  REM  143: done with 131  ( do {} while () )
+
+  WHEN 144: IF DEBUG AND 1 PROCbot:PRINT"fngen: sys(""*"",(.*.),(.*.),*%) *"
+
+   REM Cunningly enough, we can have strings à la Basic SYS
+
+   PROCoutcode("\ sys()")
+   next%=FNget(this%,"first",stmt%):REM Start decoding SWI params
+
+   IF DEBUG AND 1 PROCbot:PRINT"fngen: next%=";next%;" next->type=";FNget(next%,"type",expr%)
+
+   REM Find SWI name
+
+   WHILE FNget(next%,"type",expr%)=48
+    next%=FNget(next%,"left",expr%)
+   IF DEBUG AND 1 PROCbot:PRINT"fngen: next%=";next%;" next->type=";FNget(next%,"type",expr%)
+   ENDWHILE
+
+   REM Make a note of it (if it exists, if not, abandon)
+
+   IF FNget(next%,"type",expr%)<>0 THEN
+    PROCerror("ERROR - Expected SWI name/number. Skipped sys().")
+   ELSE
+    swi$=$FNget(FNget(next%,"right",expr%),"name",idtr%)
+
+    IF DEBUG AND 1 PROCbot:PRINT"fngen: Swi "+swi$
+
+    tmp%=next%:next%=FNget(next%,"parn",expr%)
+    PROClose(tmp%,expr%):REM Lose the string storage when swi "" gen'd
+
+    REM If there are some input parameters . . .
+
+    IF next%<>0 THEN
+     tp%=next%
+     PROCputZ(0,next%,"left",expr%)
+     next%=FNget(next%,"right",expr%)
+
+     REM . . . find the first . . .
+
+     WHILE FNget(next%,"type",expr%)=48
+      next%=FNget(next%,"left",expr%)
+     ENDWHILE
+
+     tmp%=0:REM Destination reg
+
+     REM . . . and code the expressions into R0,R1,R2,R3,R4,...
+     REM  (deleting as we go)
+
+     WHILE next%<>tp%
+      tem%=FNget(next%,"parn",expr%)
+      IF FNget(next%,"type",expr%)<>0 OR FNget(next%,"right",expr%)<>DUMMY% dummy%=FNexprgen(4,stack%,tmp%,next%)
+      next%=tem%
+      IF tmp%<>0 THEN
+       next%=FNget(next%,"parn",expr%)
+      ENDIF
+      IF next%<>tp% THEN
+       IF tmp%<>0 PROClose(FNget(next%,"left",expr%),expr%)
+       next%=FNget(next%,"right",expr%)
+      ELSE
+       IF tmp%<>0 PROClose(FNget(next%,"right",expr%),expr%)
+      ENDIF
+      tmp%+=1
+     ENDWHILE
+
+     tmp%=next%:next%=FNget(next%,"parn",expr%)
+     PROClose(tmp%,expr%)
+
+    ENDIF
+
+    REM Regs loaded, so issue SWI ""
+
+    PROCopcode("Swi",swi$):REM free(string memory) now
+
+    REM For auto BVS error after Swi "XOS_SomeThing"
+    REM  when alternate entry/exit allowed.
+
+    IF LEFT$(swi$,1)="X" PROCerror("Warning - Automatic branch in Xswi not implemented.")
+
+    IF next%<>0 THEN
+
+     REM Move this bit into parsing sometime.
+
+     IF FNget(next%,"parn",expr%)<>0 AND FNget(FNget(next%,"parn",expr%),"parn",expr%)<>0 PROCerror("ERROR - Excess variables in sys()")
+
+     REM Have had a flag request
+
+     IF FNget(next%,"parn",expr%)<>0 THEN
+      PROCopcode("StmFD","R13!,{pc} \ Store flags from SWI"):stack%+=4
+     ENDIF
+
+     REM Store regs into variables
+
+     tp%=next%
+     PROCputZ(0,next%,"left",expr%)
+     next%=FNget(next%,"right",expr%)
+
+     tmp%=0:REM Destination reg (safe bottom reg)
+
+     WHILE FNget(next%,"type",expr%)=48
+      next%=FNget(next%,"left",expr%):tmp%+=1
+     ENDWHILE
+
+     REM tmp%==number of regs tp store into (hence safe ones to use)
+     REM  If this=9 we're in trouble and will have to spill things.
+
+     next%=FNget(tp%,"right",expr%):REM Goin' down from top again.
+
+     REM Repeatedly Find store address using free regs and store
+     REM  tmp% into it, then tmp% goes into free pool.
+
+     IF DEBUG PROCbot:PRINT"fngen: outswi: type=";FNget(next%,"type",expr%)
+
+     WHILE FNget(next%,"type",expr%)=48
+      IF DEBUG PROCbot:PRINT"fngen: swi: right->type ";FNget(FNget(next%,"right",expr%),"type",expr%)<>0;" right->right=";FNget(FNget(next%,"right",expr%),"right",expr%):PROCdebug
+      IF FNget(FNget(next%,"right",expr%),"type",expr%)<>0 OR FNget(FNget(next%,"right",expr%),"right",expr%)<>DUMMY% THEN
+       IF FNexprgen(4,stack%,tmp%+11,FNget(next%,"right",expr%)) THEN
+        IF tmp%>3 PROCassign(tmp%,tmp%+1):ELSEPROCassign(tmp%,4)
+       ELSE
+        PROCerror("Error - Outval in sys not an L-value")
+       ENDIF
+      ENDIF
+
+      tmp%-=1
+
+      next%=FNget(next%,"left",expr%):PROClose(FNget(next%,"parn",expr%),expr%)
+
+     ENDWHILE
+
+     IF DEBUG AND 1 PROCdebug:PRINT"fngen: First sys op type=";FNget(next%,"type",expr%);" right=";FNget(next%,"right",expr%);" DUMMY%=";DUMMY%
+
+     IF FNget(next%,"type",expr%)<>0 OR FNget(next%,"right",expr%)<>DUMMY% THEN
+
+      REM Store val in R0. (not done with others due to loop invariant
+      REM  being slightly wrong. Besides it's a slightly diff action to
+      REM  the rest.)
+
+      IF DEBUG AND 1 PROCdebug:PRINT"fngen: Doing sys out R0"
+
+      IF FNexprgen(4,stack%,14,next%) THEN
+       PROCassign(0,4)
+      ELSE
+       PROCerror("Error - First outval in sys not an L-value")
+      ENDIF
+     ELSE
+      PROClose(next%,expr%):REM Lose node pointing to dummy (CHECK FOR OTHE DUMMY SKIPS)
+     ENDIF
+
+     next%=FNget(tp%,"parn",expr%):PROClose(tp%,expr%)
+
+     IF next%<>0 THEN
+
+      REM Cope with the flags request
+      REM         (pop, calc addr to store & then store)
+
+      tp%=FNget(next%,"right",expr%):PROClose(next%,expr%)
+      IF FNget(tp%,"type",expr%)<>0 OR FNget(tp%,"right",expr%)<>DUMMY% THEN
+       IF FNexprgen(4,stack%,14,tp%) THEN
+        PROCopcode("LdmFD","R13!,{R0} \ Take flags back"):stack%-=4
+        PROCopcode("Mov","R0,R0,lsr#28")
+        PROCassign(0,4)
+       ELSE
+        PROCerror("Error - Flag in sys is not an L-value")
+       ENDIF
+      ENDIF
+     ENDIF
+    ENDIF
+
+   ENDIF
+
+   next%=FNget(this%,"next",stmt%)
+   PROCputZ(0,this%,"next",stmt%)
+   PROCputB(0,this%,"type",stmt%):REM And Drop to next.
+
+  OTHERWISE:
+
+   REM Done all statements.
+
+   PROCerror("INTERNAL - Unknown statement number "+STR$FNget(this%,"type",stmt%))
+   next%=0:REM Don't try and go beyond this, It's almost certainly wrong.
+
+ ENDCASE
+
+ IF DEBUG AND 1 PROCdebug:PRINT"fngen: Looking to ";next%;:IF FNget(next%,"type",stmt%)<>0 PRINT" (";FNget(next%,"type",stmt%);")";
+
+ IF DEBUG AND 1 PROCbot:PRINT
+
+ REM STATDEP+=1:PRINTCHR$13;STRING$(STATDEP,"*");
+
+ IF next%=0 THEN
+
+  REM We've reached the end of a stmt list. Go up it, killing nodes until
+  REM  we find a live one, to which we go to compile.
+
+  REM STATDEP-=1:VDU127
+
+  REPEAT
+   next%=FNget(this%,"prev",stmt%)
+   IF DEBUG AND 1 PROCdebug:PRINT"fngen: Looking to ";next%;:IF FNget(next%,"type",stmt%)<>0 PRINT" (";FNget(next%,"type",stmt%);")";
+   IF DEBUG AND 1 PROCbot:PRINT
+   PROClose(this%,stmt%):this%=next%
+  REM STATDEP-=1:VDU127
+  UNTIL FNget(this%,"type",stmt%)<>0
+ ENDIF
+ this%=next%
+
+UNTIL this%=top% OR this%=0
+
+PROCopcode("LdmDB","fp,{R4-R9,fp,R13,pc}^"):REM Return from function
+PROCdatadump:REM Dump remaining data.
+
+ENDPROC
+
+*  Produces a Stm R(tmp),[R(reg)], but copes with chars and checks
+*   that R(reg) holds an L-value (val%(reg%)<0)
+
+DEFPROCassign(tmp%,reg%):REM type correct Stm R(tmp),[R(reg)]
+ IF val%(reg%)<0 THEN
+  IF FNsize(-val%(reg%))=1 THEN
+   PROCopcode("StrB","R"+STR$tmp%+",[R"+STR$reg%+"]")
+  ELSE
+   PROCopcode("Str","R"+STR$tmp%+",[R"+STR$reg%+"]")
+  ENDIF
+ ELSE
+  PROCerror("Error - Expected L-value.")
+ ENDIF
+
+ENDPROC
+
+*  Produces an error if an arithmetic operation is asked for an
+*   l-value when it can't provide one.
+
+DEFPROCgivval(a$)
+ IF wval%<>0 ENDPROC
+ IF a$="Numbers" THEN
+   PROCerror("Error - Numbers have no locations. (0x for hex, not &?)")
+ ELSE
+   IF RIGHT$(a$)="s" PROCerror("Error - "+a$+" have no locations"):ELSE PROCerror("Error - "+a$+" has no location")
+ ENDIF
+ PROCoutcode("\ error - address required from "+a$)
+ENDPROC
+
+***************************
+*
+*  FNexprgen - Produce machine code for the given expression
+*
+***************************
+
+Cannot simply go about deleting the tree because we lose the type
+ information. Therefore, do this:
+
+  killnd% = FALSE : Nothing.
+  killnd% = TRUE  : Mark this node's parent to say that this node has been
+                     dealt with.
+
+ If this node is not the left /or/ right hand child of its parent,
+   and killnd%, delete the node and its children.
+
+ The marking is put into foo?prec, bit 1 = Cleared for left  dealt with
+                                   bit 0 = Cleared for right dealt with
+
+DEFFNexprgen(reg%,stack%,bool%,tree%)
+
+IF tree%=0 :=FALSE
+
+ REM bool%: -1 (TRUE) = Set flags for Cmp result,#0
+ REM               -2 = Don't need anything at the end
+ REM             0..9 = Leave result in R(n)
+ REM           10..19 = Leave address in R(n-10), min=R4 for R0-R3
+ REM                                               convention
+
+ REM reg%=lowest useable reg: stack%=value of stack: tree%=start node
+
+ LOCAL this%,op%,wval%,tmp%,killnd%,ret%,treepar%,treetop%
+
+ ARIDEP=0
+
+ op%=bool%:IF op%>10 op%-=10
+ IF op%>reg% reg%=op%      :REM make reg% safe for bool%
+
+ this%=tree%:val%()=0:wval%=ABS(bool%<10):REM wval=Value req'd?
+                                          REM as opposed to ident's locn
+
+ treepar%=tree%!parn:REM Save this for later
+ treetop%=tree%
+
+ tree%?prec=3: LEFT=2: RIGHT=1
+
+ IF DEBUG AND 1 PROCbot:PRINT"exprgen: tree%=";tree%;" tree->parn=";FNget(tree%,"parn",expr%)
+
+ REPEAT
+
+  REM Give a warning if R10 is needed for calculations. This is NOT
+  REM  a sufficiently strong test since R10,R11 could be used if
+  REM  reg%=9 and node is ++ or [] (eg), but it does for the moment.
+
+  REM Procedurise this and formalise register acquisition/release
+  REM  (maybe extend that into spilling too).
+
+  IF reg%=10 PROCerror("COMPILER - Algebra too complex."):PROCprint(tree%)
+
+  REM Get operation and convert old pseudo-comma (`:`) into comma (`,`)
+
+  op%=this%?type:IF op%=49 op%=48
+
+  REM Unset 'kill node' flag.
+
+  killnd%=FALSE
+
+  IF DEBUG AND 1 PROCbot:PRINT"exprgen: Compiling op ";MID$(opl$,op%*3-2,3);(this%!left);FNcut(MID$(opm$,op%*3-2,3));(this%!right);FNcut(MID$(opr$,op%*3-2,3));" wval%=";wval%
+  IF DEBUG AND 1 PROCbot:PRINT"exprgen: Base register - ";reg%
+  IF DEBUG AND 1 PROCbot:PRINT"exprgen: Compiling op ";:PROCprint(this%):PRINT
+
+  REM Deals with identifiers, numeric and string constants.
+
+  IF op%=0 THEN
+
+   REM Get data node and name
+
+   tmp%=this%!right:op%=tmp%!name
+
+   IF ?op%=34 THEN
+
+    REM It's a string. String to dump block and get address
+
+    PROCopcode("Adr","R"+STR$reg%+","+FNinsdump(3,this%,op%))
+    val%(reg%)=FNget(CharType%,"locn",idtr%)
+   ENDIF
+   IF 47<?op% AND ?op%<58 OR ?op%=38 THEN
+
+    REM It's a number. Simple or complex?
+
+    IF EVAL$op%<256 THEN
+     PROCopcode("Mov","R"+STR$reg%+",#"+$op%)
+
+     REM Simple <256 case (should do <4096 too...)
+
+    ELSE
+
+     PROCopcode("Ldr","R"+STR$reg%+",[pc]")    :REM Load NV'd number
+     PROCopcode("Bic","R"+STR$reg%+",R"+STR$reg%+",#"+STR$(15 EOR (EVAL$op%>>28))+"<<28")                                 :REM NV -> real nybble
+
+     PROCopcode("DCD","&"+STR$~(EVAL$op% OR &F0000000)+" \ Load number &"+STR$~VAL$op%):REM NV'd number
+
+     REM Load NeVer'd number, Restore original top nybble, run through
+     REM  NV opcode (which happens to be the number we asked for...)
+
+    ENDIF
+    PROCgivval("Numbers"):wval%=0
+    val%(reg%)=IntType%
+   ENDIF
+   IF ?op%>64 THEN
+    IF tmp%?nodt=8 THEN
+
+     REM It's an enum tag field. (Assume constant's in range)
+
+     PROCgivval("Enum members")
+     PROCopcode("Mov","R"+STR$reg%+",#"+STR$(tmp%!locn)+" \ "+$op%)
+     val%(reg%)=IntType%
+    ELSE
+
+     REM It's a real ident &x or (x)?
+
+     val%(reg%)=-(this%!tptr):REM Assume &x . . .
+
+     IF wval% val%(reg%)=ABSval%(reg%):    REM unless wval says otherwise
+
+     IF ?((tmp%!type)+nodt)=4 AND !((tmp%!type)+locn)=2 THEN
+      REM PROCgivval("Array identifiers") no error; checked in assign etc
+      wval%=0:val%(reg%)=ABSval%(reg%):    REM ( array id IS a location )
+     ENDIF
+
+     REM Is ident Global, local or arg?
+
+     IF FNfind($op%,glid%,idtr%)=tmp% THEN
+
+     REM ($op% found in GLobal IDent tree == this variable) => global.
+
+     REM  Note this is not just name matching, but location matching.
+
+      IF wval% THEN
+       PROCopcode("Ldr","R"+STR$reg%+",[pc]")
+
+       IF val%(reg%)=CharType% THEN
+        PROCopcode("LdrB","R"+STR$reg%+",[pc,R"+STR$reg%+"]")
+       ELSE
+        PROCopcode("Ldr","R"+STR$reg%+",[pc,R"+STR$reg%+"]")
+       ENDIF
+
+       IF tmp%!locn>=0 THEN
+        PROCopcode("DCD",$op%+"-P%-4 \ File defined value RQ")
+       ELSE
+        PROCopcode("DCD","FNiden("+STR$ABStmp%!locn+",1,"+$op%+") \ Extern ref "+$op%+" value")
+       ENDIF
+
+                    REM Supply value
+      ELSE
+
+       PROCopcode("Ldr","R"+STR$reg%+",[pc]")
+
+       PROCopcode("Add","R"+STR$reg%+",pc,R"+STR$reg%)
+
+       IF tmp%!locn>=0 THEN
+        PROCopcode("DCD",$op%+"-P%-4 \ File defined address RQ")
+       ELSE
+        PROCopcode("DCD","FNiden("+STR$ABStmp%!locn+",2,"+$op%+") \ Extern ref "+$op%+" address")
+       ENDIF
+
+                    REM Supply address
+      ENDIF
+     ELSE
+      IF tmp%!locn>=0 THEN
+
+      REM Location > 0, => local variable (relative to stack pointer)
+
+       IF wval% THEN
+        IF val%(reg%)=CharType% THEN
+         PROCopcode("LdrB","R"+STR$reg%+",[R13,#"+STR$(stack%-(tmp%!locn)-FNsize(tmp%!type))+"] \ "+$op%)
+        ELSE
+         PROCopcode("Ldr","R"+STR$reg%+",[R13,#"+STR$(stack%-(tmp%!locn)-FNsize(tmp%!type))+"] \ "+$op%)
+        ENDIF
+       ELSE
+         IF stack%-(tmp%!locn)-FNsize(tmp%!type) > 0 THEN
+           PROCopcode("Add","R"+STR$reg%+",R13,#"+STR$(stack%-(tmp%!locn)-FNsize(tmp%!type))+" \ &"+$op%)
+         ELSE
+           PROCopcode("Sub","R"+STR$reg%+",R13,#"+STR$(-(stack%-(tmp%!locn)-FNsize(tmp%!type)))+" \ &"+$op%)
+         ENDIF
+       ENDIF
+      ELSE
+
+      REM Location < 0, => argument thing.
+
+       IF wval% THEN
+        IF val%(reg%)=CharType% THEN
+         PROCopcode("LdrB","R"+STR$reg%+",[fp,#"+STR$(-(tmp%!locn))+"] \ arg - "+$op%)
+        ELSE
+         PROCopcode("Ldr","R"+STR$reg%+",[fp,#"+STR$(-(tmp%!locn))+"] \ arg - "+$op%)
+        ENDIF
+       ELSE
+        PROCopcode("Add","R"+STR$reg%+",fp,#"+STR$(-(tmp%!locn))+" \ & (arg - "+$op%+")")
+       ENDIF
+      ENDIF
+     ENDIF
+    ENDIF
+   ENDIF
+   op%=0
+   killnd%=TRUE
+  ENDIF
+
+  IF op%=1 THEN
+
+  REM Array operation.
+
+  REM int foo[][], foo returns &foo[0][0]. &foo - &foo[0][0] too.
+
+  REM thus foo[a] returns &foo[a][0]. &foo[a] - &foo[a][0] too.
+
+  REM int foo[][] foo[a]    == (foo+a'),       &foo[a]    == (foo+a') too.
+  REM             foo[a][b] == *((foo+a')+b'), &foo[a][b] == ((foo+a')+b')
+
+   IF this%?prec AND RIGHT THEN
+
+    REM Store wval for next half, but modify to wval=getaddress if the
+    REM  type of this node is an array.
+
+    IF ?(this%!tptr+locn)=2 wval%=0
+
+    this%?brax=wval%
+
+    REM Get index:
+
+    this%=this%!right:wval%=1:this%?prec=3
+   ELSE
+    IF this%?prec AND LEFT THEN
+
+     reg%+=1:REM Index in reg%, so don't use it. Use reg%+1 and above
+             REM  This is the sort of thing that should have more
+             REM  stringent tests put on it. Error if reg%>=10
+
+     REM Get array base. Pointers forced to yield values (base addresses),
+     REM  Arrays of non arrays get dereferenced, arrays of arrays left.
+
+     this%=this%!left:this%?prec=3
+     wval%=( !(this%!tptr+locn)=2 )+1
+     IF DEBUG AND 1 PROCbot:PRINT"exprgen: Is array:"!(this%!tptr+locn)" wval%=";wval%
+    ELSE
+
+     REM Address returned = index*sizeof(type)+base address
+
+     reg%-=1
+     wval%=this%?brax
+
+     REM This->tptr is the disarrayed :-) this->left->tptr
+     REM  due to FNtypify and FNexpr
+
+     REM THIS SYSTEM WILL HAVE TO CHANGE SLIGHTLY WITH TYPES LIKE
+     REM  FLOATS/DOUBLE/LONG ARRIVING. (IE THE MUL/MLA SECTION WHICH
+     REM  FOR LDR (wval=1) TYPE, JUST GETS THE FIRST WORD.)
+
+     REM IE DON'T DO BY *SIZE*, BUT BY *TYPE*.
+
+     REM Float        - Single  prec; LdfS Fn,[Rn,#nnn]
+     REM Double       - Double  prec; LdfD Fn,[Rn,#nnn]
+     REM Long         - Exended prec; LdfE Fn,[Rn,#nnn]
+     REM Packed BCD ? - Packed  prec; LdfP Fn,[Rn,#nnn]
+
+     REM It's currently more efficient to use ( (type*)[int] )
+     REM  than *( (type*) + int )  !!!
+
+     tmp%=FNsize(this%!tptr)
+     IF tmp%=1 THEN
+
+      REM Case for chars (size=1)
+
+      IF wval% THEN
+       PROCopcode("LdrB","R"+STR$reg%+",[R"+STR$(reg%+1)+",R"+STR$reg%+"] \ [base+index]")
+      ELSE
+       PROCopcode("Add","R"+STR$reg%+",R"+STR$(reg%+1)+",R"+STR$reg%+" \ &[base+index]")
+      ENDIF
+     ELSE
+      IF tmp%=4 THEN
+
+       REM Case for ints/pointers (size=4)
+
+       IF wval% THEN
+        PROCopcode("Ldr","R"+STR$reg%+",[R"+STR$(reg%+1)+",R"+STR$reg%+",Lsl#2] \ [base+index]")
+       ELSE
+        PROCopcode("Add","R"+STR$reg%+",R"+STR$(reg%+1)+",R"+STR$reg%+",Lsl#2 \ &[base+index]")
+       ENDIF
+      ELSE
+
+       REM Case for strange things (size=?@&^%!&@#:-)
+
+       PROCopcode("Mov","R"+STR$(reg%+2)+",#"+STR$tmp%+" \ sizeof()")
+       IF wval% THEN
+        PROCopcode("Mul","R"+STR$reg%+",R"+STR$(reg%+2)+",R"+STR$reg%+" \ index*=sizeof")
+        PROCopcode("Ldr","R"+STR$reg%+",[R"+STR$(reg%+1)+",R"+STR$reg%+"] \ [base+index]")
+        PROCerror("Attention - Request for value access to unknown type. Taken one word.")
+       ELSE
+        PROCopcode("Mla","R"+STR$reg%+",R"+STR$(reg%+2)+",R"+STR$reg%+",R"+STR$(reg%+1)+" \ base+index*sizeof")
+        REM This access is OK since it might be an array of array thing.
+       ENDIF
+      ENDIF
+     ENDIF
+     killnd%=TRUE:val%(reg%)=-(this%!tptr)
+     IF wval% val%(reg%)=ABSval%(reg%)
+    ENDIF
+   ENDIF
+  ENDIF
+
+REM Deal with function calls. This generated code stacks things and then
+REM  pops them into R1-3 as needed. Is therefore not efficient (yet)
+
+REM I will have to ask Acorn a few more questions about APCS and their
+REM  C compiler to enable cross-linking and efficient register usage.
+
+  IF op%=2 THEN
+
+   REM Warn about attempts to get the L-value of a function
+   REM  (first time only)
+
+   IF this%?atom<>255 PROCgivval("Functions"):this%?atom=255
+
+   tmp%=this%!left
+
+   REM If there are some parameters to evaluate...
+
+   IF this%!right<>0 AND this%?prec AND RIGHT THEN
+
+    REM If this->left->left != 0, We've been here before; push the value.
+
+    IF tmp%!left<>0 PROCopcode("StmFD","R13!,{R"+STR$reg%+"}"):stack%+=4
+    IF DEBUG AND 1 PROCbot:PRINT"exprgen: Stack parameter ";tmp%!left;"<>0 => stacked.":PROCdebug
+
+    REM Increment this->left->left. I might change this to decrement and
+    REM  treat R1-R3 specially like R0.
+
+    tmp%!left=tmp%!left+1
+
+    REM If this->type == comma, delink the tree of the last expression
+    REM  reset the expression tree as if the last thing hadn't been there,
+    REM  (ready for next time), and code the detached tree. Which points
+    REM  back to this 'function' node.
+
+    tmp%=this%!right
+    IF tmp%?type=48 THEN
+     !((tmp%!right)+parn)=this%
+     !((tmp%!left)+parn)=this%
+     op%=tmp%!left:this%!right=op%
+     this%=tmp%!right:PROClose(tmp%,expr%)
+    ELSE
+
+     REM Otherwise this is the first argument. Coding ends up in the
+     REM  next code section.
+
+     tmp%=this%!right:this%=tmp%
+    ENDIF
+    wval%=1:REM We want the value of the parameters (unlike sys(,(),(*),) )
+    this%?prec=3:REM Both sides to be dealt with...
+   ELSE
+    op%=tmp%!left
+
+    REM If there were /any/ parameters, the first value will be in R(reg%)
+
+    IF op% PROCopcode("Mov","R0,R"+STR$reg%)
+
+    REM Retrieve a maximum of 3 values from the stack into R1-R3.
+
+    IF 1<op% AND op%<5 THEN
+     PROCopcode("LdmFD","R13!,{R1-R"+STR$(op%-1)+"}"):stack%-=4*op%-4
+    ELSE
+     IF op%>4 PROCopcode("LdmFD","R13!,{R1-R3}"):stack%-=12
+    ENDIF
+
+    REM Goto function ( Want to be able to jump to (*local/arg)() )
+
+REM-----------------------------
+    IF FNfind($!((tmp%!right)+name),glid%,idtr%)=(tmp%!right) THEN
+    REM GLOBAL - Global ID fncalls are constant ONLY
+
+     IF !((tmp%!right)+locn)>=0 THEN
+     REM  DEFINED
+
+      PROCopcode("BL",$!((tmp%!right)+name)):REM File-defined function
+
+     ELSE
+     REM EXTERNAL
+
+        PROCopcode("DCD","FNiden("+STR$ABS!((tmp%!right)+locn)+",3,"+ $!((tmp%!right)+name)+") \ Extern fn "+$!((tmp%!right)+name))
+
+
+      ENDIF
+    ELSE
+      IF !((tmp%!right)+locn)>=0 THEN
+      REM AUTO
+      PROCopcode("Mov","R14,PC \ Record link register")
+      PROCopcode("Ldr","PC,[R13,#"+STR$(stack%-(!((tmp%!right)+locn))- FNsize(!((tmp%!right)+type)))+ "] \ BL *"+$!((tmp%!right)+name))
+
+      ELSE
+      REM ARGUMENT
+        PROCopcode("Mov","R14,PC \ Record link register")
+        PROCopcode("Ldr","PC,[fp,#"+STR$(-(!((tmp%!right)+locn)))+"] \ BL *"+$!((tmp%!right)+name))
+
+      ENDIF
+    ENDIF
+
+REM-----------------------------
+REM     IF !((tmp%!right)+locn)>=0 THEN
+REM      IF FNfind($!((tmp%!right)+name),glid%,idtr%)=(tmp%!right) THEN
+REM 
+REM       PROCopcode("BL",$!((tmp%!right)+name)):REM File-defined function
+REM 
+REM      ELSE
+REM 
+REM       PROCopcode("Mov","R14,PC \ Record link register")
+REM       PROCopcode("Ldr","PC,[R13,#"+STR$(stack%-(!((tmp%!right)+locn))- FNsize(!((tmp%!right)+type)))+ "] \ BL *"+$!((tmp%!right)+name))
+REM 
+REM       ENDIF
+REM     ELSE
+REM 
+REM       IF FNfind($!((tmp%!right)+name),glid%,idtr%)=(tmp%!right) THEN
+REM 
+REM         PROCopcode("DCD","¤iden("+STR$ABS!((tmp%!right)+locn)+",3,"+ $!((tmp%!right)+name)+") \ Extern fn "+$!((tmp%!right)+name))
+REM 
+REM       ELSE
+REM 
+REM         PROCopcode("Mov","R14,PC \ Record link register")
+REM         PROCopcode("Ldr","PC,[fp,#"+STR$(-(!((tmp%!right)+locn)))+"] \ BL *"+$!((tmp%!right)+name))
+REM 
+REM       ENDIF
+REM     ENDIF
+REM -----------------------------
+    REM Reset the stack marker to kill any stacked values
+
+    IF op%>4 PROCopcode("Add","R13,R13,#"+STR$(4*(op%-4))+" \ sp-="+STR$(op%-4)+" args"):stack%-=4*(op%-4)
+
+    REM Restore function result (R0) into R(reg%)
+    REM Note that if we are returning a function,
+    REM  we get Mov R4,R0:Mov R0,R4 which looks silly, but this is just
+    REM  a symptom of the whole 'return' thing.
+
+    PROCopcode("Mov","R"+STR$reg%+",R0 \ Restore result into R"+STR$reg%)
+    val%(reg%)=this%!tptr
+    PROClose(tmp%,expr%)
+    killnd%=TRUE
+   ENDIF
+   op%=2
+  ENDIF
+
+  REM Struct tag references
+
+  IF op%=3 OR op%=4 THEN
+   IF this%?prec AND LEFT THEN
+
+    REM Store wval and code LHS (if we haven't already)
+
+    this%?brax=wval%
+    this%=this%!left:this%?prec=3
+    wval%=op%=3
+    REM Want to evaluate LHS in 'LHS->', but the address in 'LHS.'
+   ELSE
+    wval%=this%?brax:REM Retrieve entry wval
+
+    val%(reg%)=-(this%!tptr):REM Set for L-value version
+
+    REM Check for array type (like id node)
+
+    IF ?((tmp%!tptr)+nodt)=4 AND !((this%!tptr)+locn)=2 THEN
+     PROCgivval("Array expressions")
+     val%(reg%)=ABSval%(reg%)
+     wval%=0                  :REM Fix for array types.
+
+      REM Array references's _value_ *is* its address. An array reference
+      REM  cannot be assigned to. foo bar[];  bar=5 /* nonsense */
+      REM                                    *bar=5 /* sensible */
+
+    ENDIF
+
+    IF wval% THEN
+     PROCopcode("Ldr","R"+STR$reg%+",[R"+STR$reg%+",#"+STR$(this%!right)+"]  \ -> or .")
+     val%(reg%)=ABSval%(reg%)
+    ELSE
+     PROCopcode("Add","R"+STR$reg%+",R"+STR$reg%+",#"+STR$(this%!right)+" \ -> or .")
+    ENDIF
+    killnd%=TRUE
+   ENDIF
+  ENDIF
+
+  REM a++, a--  Returns old, stores new
+
+  IF 5<=op% AND op%<=6 THEN
+
+   IF this%?prec AND RIGHT THEN
+    PROCgivval("Post inc/dec")
+    this%=this%!right:wval%=0:REM Get address of a.
+    this%?prec=3
+   ELSE
+
+    REM Byte get is only for char type. (as float get only for floats etc)
+
+    REM This (and similar type investigations) should be put
+
+    IF this%!tptr=CharType% THEN
+     PROCopcode("LdrB","ip,[R"+STR$reg%+"]")
+    ELSE
+     PROCopcode("Ldr","ip,[R"+STR$reg%+"]")
+    ENDIF
+
+    REM Put the amount to inc/dec into tmp%
+
+    IF ?((this%!tptr)+nodt)=4 AND ( !((this%!tptr)+locn)=1 OR !((this%!tptr)+locn)=2 ) THEN
+     tmp%=FNsize(!((this%!tptr)+type))
+    ELSE
+     tmp%=1
+    ENDIF
+
+    REM Do the inc/dec thing.
+
+    IF op%=5 THEN
+     PROCopcode("Add","R"+STR$(reg%+1)+",ip,#"+STR$tmp%)
+    ELSE
+     PROCopcode("Sub","R"+STR$(reg%+1)+",ip,#"+STR$tmp%)
+    ENDIF
+
+    REM Put the thing
+
+    IF this%!tptr=CharType% THEN
+     PROCopcode("StrB","R"+STR$(reg%+1)+",[R"+STR$reg%+"]")
+    ELSE
+     PROCopcode("Str","R"+STR$(reg%+1)+",[R"+STR$reg%+"]")
+    ENDIF
+
+    PROCopcode("Mov","R"+STR$reg%+",ip"):REM Return old value
+    val%(reg%)=this%!tptr
+    killnd%=TRUE
+   ENDIF
+
+  ENDIF
+
+  REM 'Address of' asks for an L-value and pretends that it was really
+  REM  an R-value.
+
+  IF op%=7 THEN
+   IF this%?prec AND RIGHT THEN
+
+    PROCgivval("& operator")
+
+    this%=this%!right:wval%=0:this%?prec=3
+   ELSE
+    val%(reg%)=ABSval%(reg%)
+    PROCoutcode("\ reg "+STR$reg%+" set to &value")
+    killnd%=TRUE
+   ENDIF
+  ENDIF
+
+  REM ~ Bitwise not.
+
+  IF op%=8 THEN
+   IF this%?prec AND RIGHT THEN
+    PROCgivval("~")
+    this%=FNget(this%,"right",expr%):wval%=1:this%?prec=3
+   ELSE
+    PROCopcode("Mvn","R"+STR$reg%+",R"+STR$reg%)
+    killnd%=TRUE
+   ENDIF
+  ENDIF
+
+  REM ! Logical not.
+
+  IF op%=9 THEN
+   IF this%?prec AND RIGHT THEN
+    PROCgivval("!")
+    this%=this%!right:wval%=1:this%?prec=3
+   ELSE
+    PROCopcode("Cmp","R"+STR$reg%+",#0")
+    PROCopcode("MovEQ","R"+STR$reg%+",#1")
+    PROCopcode("MovNE","R"+STR$reg%+",#0")
+    killnd%=TRUE
+   ENDIF
+  ENDIF
+
+  REM Pointer dereference. (copes with requests for r and l values)
+
+  IF op%=10 THEN
+   IF this%?prec AND RIGHT THEN
+    this%?brax=wval%
+    this%=this%!right:wval%=1:this%?prec=3
+   ELSE
+
+    wval%=this%?brax
+    IF val%(reg%)<0 PROCerror("Internal - *ptr received val()<0"):val%(reg%)=ABSval%(reg%)
+    IF FNsize(val%(reg%)!type)=1 THEN
+     IF wval% PROCopcode("LdrB","R"+STR$reg%+",[R"+STR$reg%+"]")
+    ELSE
+     IF wval% PROCopcode("Ldr","R"+STR$reg%+",[R"+STR$reg%+"]")
+    ENDIF
+    val%(reg%)=-(this%!tptr)
+    IF wval% val%(reg%)=ABSval%(reg%)
+    killnd%=TRUE
+   ENDIF
+  ENDIF
+
+  REM Unary +/-
+
+  IF 11<=op% AND op%<=12 THEN
+   IF this%?prec AND RIGHT THEN
+    PROCgivval("Unary +/-")
+    this%=this%!right:wval%=1:this%?prec=3
+   ELSE
+    IF op%=11 THEN
+     PROCopcode("Rsb","R"+STR$reg%+",R"+STR$reg%+",#0")
+    ENDIF
+    killnd%=TRUE
+   ENDIF
+  ENDIF
+
+  REM ++a, --a  gives & stores new
+
+  IF 13<=op% AND op%<=14 THEN
+
+   IF this%?prec AND RIGHT THEN
+    PROCgivval("Pre inc/dec")
+    this%=this%!right:wval%=0:this%?prec=3
+   ELSE
+
+    IF this%!tptr=CharType% THEN
+     PROCopcode("LdrB","ip,[R"+STR$reg%+"]")
+    ELSE
+     PROCopcode("Ldr","ip,[R"+STR$reg%+"]")
+    ENDIF
+
+    IF ?((this%!tptr)+nodt)=4 AND ( !((this%!tptr)+locn)=1 OR !((this%!tptr)+locn)=2 ) THEN
+     tmp%=FNsize(!((this%!tptr)+type))
+    ELSE
+     tmp%=1
+    ENDIF
+
+    IF op%=13 THEN
+     PROCopcode("Add","ip,ip,#"+STR$tmp%)
+    ELSE
+     PROCopcode("Sub","ip,ip,#"+STR$tmp%)
+    ENDIF
+
+    IF this%!tptr=CharType% THEN
+     PROCopcode("StrB","ip,[R"+STR$reg%+"]")
+    ELSE
+     PROCopcode("Str","ip,[R"+STR$reg%+"]")
+    ENDIF
+
+    PROCopcode("Mov","R"+STR$reg%+",ip"):REM Return new value
+    val%(reg%)=this%!tptr
+    killnd%=TRUE
+   ENDIF
+
+  ENDIF
+
+  REM op%=15 is typecast. Should do val[reg]=this->right
+  REM  I'm not bothering because I haven't coded.
+
+  REM Standard binary operations (only arithmetic code, no branches)
+
+  IF (16<=op% AND op%<=31) OR op%=48 THEN
+   IF this%?prec AND LEFT THEN
+    PROCgivval("Binary operations")
+    this%=this%!left:wval%=1:this%?prec=3
+   ELSE
+    IF this%?prec AND RIGHT THEN
+     this%=this%!right:wval%=1:this%?prec=3
+     IF op%<>48 reg%+=1:ELSEPROCoutcode("\ comma/colon operator")
+    ELSE
+     IF op%<>48 reg%-=1
+     CASE op% OF
+      WHEN 16: PROCopcode("Mul","R"+STR$reg%+",R"+STR$(reg%+1)+",R"+STR$reg%)
+      WHEN 17: PROCopcode("\Div","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+      WHEN 18: PROCopcode("\Mod","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+
+      WHEN 19:
+
+       REM Add. copes with pointer+int, int+pointer and int+int.
+       REM pointer+pointer is probably buggy C.
+
+       tmp%=!((this%!left)+tptr)
+       IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+
+        tmp%=!((this%!right)+tptr)
+
+        IF (tmp%?nodt)=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+
+         PROCerror("WARNING - Pointer added to pointer.")
+
+        ENDIF
+
+        tmp%=!((this%!left)+tptr):tmp%=FNsize(tmp%!type)
+
+        IF tmp%<>4 AND tmp%<>1 THEN
+         PROCopcode("Mov","R"+STR$(reg%+2)+",#"+STR$tmp%)
+         PROCopcode("Mla","R"+STR$reg%+",R"+STR$(reg%+2)+",R"+STR$(reg%+1)+",R"+STR$reg%)
+        ELSE
+         IF tmp%=4 PROCopcode("Add","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1)+", Lsl#2")
+         IF tmp%=1 PROCopcode("Add","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+        ENDIF
+       ELSE
+        tmp%=!((this%!right)+tptr)
+        IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+         tmp%=FNsize(tmp%!type)
+         IF tmp%<>4 AND tmp%<>1 THEN
+          PROCopcode("Mov","R"+STR$(reg%+2)+",#"+STR$tmp%)
+          PROCopcode("Mla","R"+STR$reg%+",R"+STR$(reg%+2)+",R"+STR$reg%+",R"+STR$(reg%+1))
+         ELSE
+          IF tmp%=4 PROCopcode("Add","R"+STR$reg%+",R"+STR$(reg%+1)+",R"+STR$reg%+", Lsl#2")
+          IF tmp%=1 PROCopcode("Add","R"+STR$reg%+",R"+STR$(reg%+1)+",R"+STR$reg%)
+         ENDIF
+        ELSE
+         PROCopcode("Add","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+        ENDIF
+       ENDIF
+
+      WHEN 20:
+
+       REM Subtract copes with int-int, pointer-int and pointer-pointer
+       REM  int-pointer is bad C.
+
+       tmp%=!((this%!left)+tptr)
+       IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+
+        tmp%=!((this%!right)+tptr)
+        IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+
+         tmp%=FNsize( !( !( (this%!right) +tptr) +type) )
+
+         PROCopcode("Sub","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+         IF tmp%=4 PROCopcode("Mov","R"+STR$reg%+",R"+STR$reg%+",Lsr#2")
+         IF tmp%=1 PROCopcode("Mov","R"+STR$reg%+",R"+STR$reg%)
+         IF tmp%<>1 AND tmp%<>4 PROCerror("INTERNAL - Pointer minus pointer is the raw value.")
+        ELSE
+         tmp%=FNsize( !( !( (this%!left) +tptr) +type) )
+         IF tmp%<>4 AND tmp%<>1 THEN
+          PROCopcode("Mov","R"+STR$(reg%+2)+",#"+STR$tmp%)
+          PROCopcode("Mul","R"+STR$(reg%+1)+",R"+STR$(reg%+2)+",R"+STR$(reg%+1))
+          PROCopcode("Sub","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+         ELSE
+          IF tmp%=4 PROCopcode("Sub","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1)+",Lsl#2")
+          IF tmp%=1 PROCopcode("Sub","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+         ENDIF
+        ENDIF
+       ELSE
+        PROCopcode("Sub","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+       ENDIF
+
+      WHEN 21: PROCopcode("Mov","R"+STR$reg%+",R"+STR$reg%+",Lsr R"+STR$(reg%+1))
+      WHEN 22: PROCopcode("Mov","R"+STR$reg%+",R"+STR$reg%+",Lsl R"+STR$(reg%+1))
+      WHEN 23: PROCopcode("Cmp","R"+STR$reg%+",R"+STR$(reg%+1))
+               PROCopcode("MovGT","R"+STR$reg%+",#1")
+               PROCopcode("MovLE","R"+STR$reg%+",#0")
+      WHEN 24: PROCopcode("Cmp","R"+STR$reg%+",R"+STR$(reg%+1))
+               PROCopcode("MovGE","R"+STR$reg%+",#1")
+               PROCopcode("MovLT","R"+STR$reg%+",#0")
+      WHEN 25: PROCopcode("Cmp","R"+STR$reg%+",R"+STR$(reg%+1))
+               PROCopcode("MovLT","R"+STR$reg%+",#1")
+               PROCopcode("MovGE","R"+STR$reg%+",#0")
+      WHEN 26: PROCopcode("Cmp","R"+STR$reg%+",R"+STR$(reg%+1))
+               PROCopcode("MovLE","R"+STR$reg%+",#1")
+               PROCopcode("MovGT","R"+STR$reg%+",#0")
+      WHEN 27: PROCopcode("Cmp","R"+STR$reg%+",R"+STR$(reg%+1))
+               PROCopcode("MovEQ","R"+STR$reg%+",#1")
+               PROCopcode("MovNE","R"+STR$reg%+",#0")
+      WHEN 28: PROCopcode("Cmp","R"+STR$reg%+",R"+STR$(reg%+1))
+               PROCopcode("MovNE","R"+STR$reg%+",#1")
+               PROCopcode("MovEQ","R"+STR$reg%+",#0")
+      WHEN 29: PROCopcode("And","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+      WHEN 30: PROCopcode("Eor","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+      WHEN 31: PROCopcode("Orr","R"+STR$reg%+",R"+STR$reg%+",R"+STR$(reg%+1))
+     ENDCASE
+     killnd%=TRUE
+    ENDIF
+    val%(reg%)=this%!tptr
+   ENDIF
+  ENDIF
+
+  REM && or ||. These generate jumping code. Only evaluate enough to find
+  REM  a definite answer (due to ANSI)
+
+  IF op%=32 OR op%=33 THEN
+   IF this%?prec AND LEFT THEN
+    this%=this%!left:wval%=1:this%?prec=3
+   ELSE
+    IF this%?prec AND RIGHT THEN
+     REM Potential cutoff point
+      PROCopcode("Teq","R"+STR$reg%+",#0")
+     IF op%=32 THEN
+      PROCopcode("BEQ","AndJ"+STR$~this%+FNlbo)
+     ELSE
+      PROCopcode("BNE","OrJ"+STR$~this%+FNlbo)
+     ENDIF
+     this%=this%!right:reg%+=1:wval%=1:this%?prec=3
+    ELSE
+     PROCopcode("TEq","R"+STR$reg%+",#0")
+     reg%-=1
+     CASE op% OF
+      WHEN 32: PROClbcode("AndJ"+STR$~this%,"","")
+               PROCopcode("MovEQ","R"+STR$reg%+",#0")
+               PROCopcode("MovNE","R"+STR$reg%+",#1")
+      WHEN 33: PROClbcode("OrJ"+STR$~this%,"","")
+               PROCopcode("MovNE","R"+STR$reg%+",#1")
+               PROCopcode("MovEQ","R"+STR$reg%+",#0")
+     ENDCASE
+     killnd%=TRUE
+     val%(reg%)=IntType%
+    ENDIF
+   ENDIF
+  ENDIF
+
+  REM a?b:c Cooperates with op%=36. Jumping code, not conditionals yet
+
+  IF 34=op% OR op%=35 THEN
+   IF op%=34 PROCerror("INTERNAL - Found 34 ($INKEY$$).")
+   IF this%?prec AND LEFT THEN
+    PROCgivval("Query operator usually"):this%?brax=wval%
+    this%=this%!left:this%?prec=3:REM Make comparison
+   ELSE
+    IF this%?prec AND RIGHT THEN
+     PROCopcode("Teq","R"+STR$reg%+",#0"):REM  Test value against 0
+     PROCopcode("BEQ","QueFA"+STR$~this%+FNlbo):REM  Bra to FALSE if equal
+     wval%=this%?brax:this%=this%!right:this%?prec=RIGHT
+     this%?brax=wval%:this%=this%!left:this%?prec=3
+    ELSE
+     IF op%=34 PROClbcode("QueFA"+STR$~this%,"","")
+     PROClbcode("QueEX"+STR$~this%,"","")          :REM Make exit label
+     killnd%=TRUE:wval%=this%?brax:val%(reg%)=this%!tptr
+    ENDIF
+   ENDIF
+  ENDIF
+
+  IF op%=36 THEN
+   IF this%?prec AND LEFT THEN
+    PROCerror("Internal - Colon <36>! How did you get here?")
+    this%?brax=wval%:this%=this%!left:this%?prec=3
+   ELSE
+    IF this%?prec AND RIGHT THEN
+     PROCopcode("B","QueEX"+STR$~FNget(this%,"parn",expr%)+FNlbo):REM B to exit
+     PROClbcode("QueFA"+STR$~FNget(this%,"parn",expr%),"","")
+     wval%=this%?brax:this%=this%!right:this%?prec=3:REM Trigger FALSE code
+    ELSE
+     killnd%=TRUE
+    ENDIF
+   ENDIF
+  ENDIF
+
+  REM Assignment.
+
+  IF op%=37 THEN
+
+   IF DEBUG AND 1 PROCbot:PRINT"fngen: Assign killnd=";killnd%;" left ";FNget(this%,"left",expr%);" right ";FNget(this%,"right",expr%)
+
+   IF this%?prec AND LEFT THEN
+    PROCgivval("Assignment")
+    this%=this%!left:wval%=0:this%?prec=3  :REM Request LHS l-val
+    IF ?(this%!tptr+locn)=2 PROCerror("ERROR - Assignment to array type")
+   ELSE
+    IF this%?prec AND RIGHT THEN
+     reg%+=1
+     this%=this%!right:this%?prec=3:wval%=1:REM Request RHS r-value
+    ELSE
+     reg%-=1
+
+      REM Put byte/word
+
+     IF FNsize(this%!tptr)=1 THEN
+      PROCopcode("StrB","R"+STR$(reg%+1)+",[R"+STR$reg%+"]")
+      PROCopcode("And","R"+STR$reg%+",R"+STR$(reg%+1)+",#255")
+     ELSE
+      PROCopcode("Str","R"+STR$(reg%+1)+",[R"+STR$reg%+"]")
+      PROCopcode("Mov","R"+STR$reg%+",R"+STR$(reg%+1))
+     ENDIF
+     val%(reg%)=this%!tptr
+     killnd%=TRUE
+    ENDIF
+   ENDIF
+  ENDIF
+
+  REM Assignment operators
+
+  IF 38<=op% AND op%<=47 THEN
+   IF this%?prec AND LEFT THEN
+    PROCgivval("Assignment operator")
+    this%=this%!left:wval%=0:this%?prec=3  :REM Want LHS l-value
+    IF ?(this%!tptr+locn)=2 PROCerror("ERROR - Assignment to array type")
+   ELSE
+    IF this%?prec AND RIGHT THEN
+     reg%+=1
+     this%=this%!right:wval%=1:this%?prec=3:REM Want RHS r-value
+    ELSE
+     reg%-=1
+
+     REM THIS IS NOT TYPE-SENSITIVE
+
+     PROCopcode("Ldr","ip,[R"+STR$reg%+"]")
+     CASE op% OF
+      WHEN 38:
+
+       REM Copes with pointer+=int, int+=int
+
+       tmp%=!((this%!right)+tptr)
+       IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) PROCerror("WARNING - expression+=pointer found")
+
+       tmp%=!((this%!left)+tptr)
+       IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+
+        tmp%=FNsize(tmp%!type)
+        IF tmp%<>4 AND tmp%<>1 THEN
+         PROCopcode("Mov","R"+STR$(reg%+2)+",#"+STR$FNsize(FNget(tmp%,"type",idtr%)))
+         PROCopcode("Mla","ip,R"+STR$(reg%+1)+",R"+STR$(reg%+2)+",ip")
+        ELSE
+         IF tmp%=4 PROCopcode("Add","ip,ip,R"+STR$(reg%+1)+",Lsl#2")
+         IF tmp%=1 PROCopcode("Add","ip,ip,R"+STR$(reg%+1))
+        ENDIF
+       ELSE
+        PROCopcode("Add","ip,ip,R"+STR$(reg%+1))
+       ENDIF
+
+      WHEN 39:
+
+       REM Copes with pointer-=int, int-=int
+
+       tmp%=!((this%!right)+tptr)
+       IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) PROCerror("WARNING - expression-=pointer found")
+
+       tmp%=!((this%!left)+tptr)
+       IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+
+        tmp%=FNsize(tmp%!type)
+        IF tmp%<>4 AND tmp%<>1 THEN
+         PROCopcode("Mov","R"+STR$(reg%+2)+",#"+STR$tmp%)
+         PROCopcode("Mul","R"+STR$(reg%+1)+",R"+STR$(reg%+2)+",R"+STR$(reg%+1))
+         PROCopcode("Sub","ip,ip,R"+STR$(reg%+1))
+        ELSE
+         IF tmp%=4 PROCopcode("Sub","ip,ip,R"+STR$(reg%+1)+",Lsl#2")
+         IF tmp%=1 PROCopcode("Sub","ip,ip,R"+STR$(reg%+1))
+        ENDIF
+       ELSE
+        PROCopcode("Sub","ip,ip,R"+STR$(reg%+1))
+       ENDIF
+
+      WHEN 40: PROCopcode("Mul","ip,R"+STR$(reg%+1)+",ip")
+      WHEN 41: PROCopcode("\Div","ip,ip,R"+STR$(reg%+1))
+      WHEN 42: PROCopcode("\Mod","ip,ip,R"+STR$(reg%+1))
+      WHEN 43: PROCopcode("Mov","ip,ip,lsr R"+STR$(reg%+1))
+      WHEN 44: PROCopcode("Mov","ip,ip,lsl R"+STR$(reg%+1))
+      WHEN 45: PROCopcode("And","ip,ip,R"+STR$(reg%+1))
+      WHEN 46: PROCopcode("Eor","ip,ip,R"+STR$(reg%+1))
+      WHEN 47: PROCopcode("Orr","ip,ip,R"+STR$(reg%+1))
+     ENDCASE
+     IF FNsize(this%!tptr)=1 THEN
+      PROCopcode("StrB","ip,[R"+STR$reg%+"]")
+      PROCopcode("And","R"+STR$reg%+",ip,#255")
+     ELSE
+      PROCopcode("Str","ip,[R"+STR$reg%+"]")
+      PROCopcode("Mov","R"+STR$reg%+",ip")
+     ENDIF
+     val%(reg%)=this%!tptr
+     killnd%=TRUE
+    ENDIF
+   ENDIF
+  ENDIF
+
+  REM If a code generator segment has asked for this node to be removed,
+  REM  remove it and set parent->left or parent->right to 0 as necessary.
+
+  IF DEBUG AND 1 PROCbot:PRINT"Exprgen: Post compile ";op%;" wval%=";wval%:PROCdebug
+
+  IF killnd% THEN
+   tmp%=this%!parn
+   IF tmp%<>treepar% THEN
+    IF this%=tmp%!left  tmp%?prec=tmp%?prec AND RIGHT
+    IF this%=tmp%!right tmp%?prec=tmp%?prec AND LEFT
+
+    IF this%<>tmp%!left AND this%<>tmp%!right THEN
+
+     REM If we get here, this% is the head of a detached tree, almost
+     REM  certainly from a function.
+
+     PROCkillsub(this%)
+
+    ENDIF
+
+    REM This is needed due to function op=1 using delinked subtrees.
+    REM  (was only a test of (tmp->left==this)?tmp->left=0:tmp->right=0 )
+
+   ENDIF
+   this%=tmp%
+  ENDIF
+
+ UNTIL this%=treepar%
+
+ REM ... and kill off main tree.
+
+ PROCkillsub(treetop%)
+
+ ret%=TRUE:REM set sucessful flag
+
+ IF bool%=-1 THEN
+
+  REM Produce comparison
+
+  PROCopcode("Cmp","R"+STR$reg%+",#0")
+ ELSE
+  IF bool%<>-2 THEN
+   IF bool%<10 THEN
+
+    REM Put value into reg(bool%)
+
+    IF bool%<>reg% PROCopcode("Mov","R"+STR$bool%+",R"+STR$reg%)
+   ELSE
+    bool%-=10
+
+    REM Put address into reg(corrected_bool%)
+
+    IF bool%<4 bool%=4
+    IF bool%<>reg% PROCopcode("Mov","R"+STR$bool%+",R"+STR$reg%):val%(bool%)=val%(reg%)
+    IF val%(reg%)>0 PROCerror("Error - Expected r-value"):ret%=0
+   ENDIF
+  ENDIF
+ ENDIF
+
+:=ret%
+
+*  Kill off subtree of 'dealt with' nodes.
+
+DEFPROCkillsub(this%)
+
+ IF (this%?prec AND LEFT)  = 0 PROCkillsub(this%!left)
+ IF (this%?prec AND RIGHT) = 0 PROCkillsub(this%!right)
+
+ PROClose(this%,expr%)
+
+ENDPROC
+
+*  Skip to next ; token
+
+DEFPROCsemisk:WHILE tok$<>"syb.;" tok$=FNtoken:ENDWHILE:ENDPROC
+
+*  Skip to next ; or , token
+
+DEFPROCsemicommsk:WHILE tok$<>"syb.;" AND tok$<>"syb.," tok$=FNtoken:ENDWHILE:ENDPROC
+
+*************************
+*
+*  FNexpr() - Parse an arithmetic tree
+*
+*************************
+
+*  Entered (as all parse procedures are) with first token loaded
+
+DEFFNexpr(tree%,ide%)
+
+LOCAL curr%,new%,brace%,chi%,typ%,otk$,parsed%,brak$,tmp%
+
+brace%=1:curr%=tree%:parsed%=FALSE:brak$=STRING$(255," "):brak$=""
+
+REPEAT
+
+ REM (expression) or <prefixes>id<suffixes>
+
+ REPEAT
+  new%=FNnew(expr%):IF DEBUG AND 8 PROCdebug:PRINT"expr: new%="new%
+
+  REM Brackets were treated specially to avoid memory consumption
+  REM  Treating as normal operations for the C implementation
+
+  WHILE tok$="syb.("
+   IF DEBUG AND 8 PROCdebug:PRINT"expr: Prefix:";tok$;" prec:"prc%
+   brace%+=1
+   brak$+="("
+   tok$=FNtoken
+  ENDWHILE
+
+  IF DEBUG AND 8 PROCdebug:PRINT"expr: Prefix:";tok$;" prec:"prc%
+
+  IF tok$="kwd.sizeof" THEN
+   tok$=FNtoken
+   IF tok$="syb.(" THEN
+     tok$=FNtoken
+     ttok$=FNtoken
+     IF ttok$<>"syb.)" PROCerror("ERROR - Missing ')' after sizeof("):PROCtokback(ttok$)
+   ENDIF
+   IF LEFT$(tok$,3)<>"idt" AND LEFT$(tok$,3)<>"kwd" THEN
+    PROCerror("ERROR - Sizeof *must* be followed by an identifier")
+    tok$="num.0"
+   ELSE
+    IF LEFT$(tok$,3)="kwd" THEN
+     `=FNbasetype(ide%):PROCtokback(tok$)
+    ELSE
+     `=FNiseek(MID$(tok$,5)+"I",ide%)
+    ENDIF
+    IF `<>0 tok$="num."+STR$FNsize(`):ELSE PROCerror("ERROR - Bad sizeof type.")
+   ENDIF
+  ENDIF
+
+  REM If we have a constant...
+
+  IF LEFT$(tok$,3)="idt" OR LEFT$(tok$,3)="num" OR LEFT$(tok$,3)="str" THEN
+   IF LEFT$(tok$,3)="idt" THEN
+    chi%=FNiseek(MID$(tok$,5)+"I",ide%)
+    IF chi%=0 THEN
+     PROCerror("Error - Unknown identifier: '"+MID$(tok$,5)+"'")
+     chi%=DUMMY%
+    ENDIF
+    curr%!tptr=chi%!type
+
+   ELSE
+    IF LEFT$(tok$,3)="str" tok$="str."""+MID$(tok$,5)+""""
+    typ%=LENtok$-4
+    DIM chi% typ%
+    $chi%=MID$(tok$,5)
+    typ%=FNnew(idtr%)
+    IF LEFT$(tok$,3)="str" THEN
+     typ%!type=CharType%!locn
+    ELSE
+     typ%!type=IntType%
+    ENDIF
+    typ%?nodt=9:typ%!name=chi%
+    typ%!locn=chi%
+    chi%=typ%
+   ENDIF
+   typ%=0:atom%=1
+   IF DEBUG AND 8 PROCdebug:IF chi%<>-1 PRINT"expr: Gained ";$FNget(chi%,"name",idtr%)
+  ELSE
+   tmp%=6+INSTR(" & ~ ! * - + ++--",LEFT$(MID$(tok$,5)+" ",2))/2
+
+   IF tmp%<>6 THEN
+    prc%=15:chi%=0:atom%=0:typ%=tmp%
+    IF DEBUG AND 8 PROCdebug:PRINT"expr: Prefix:";tok$
+   ELSE
+    PROCtokback(tok$)
+    IF tok$<>"syb.," AND curr%?type<>2 PROCerror("ERROR - Missing identifier (found "+tok$+"). Inserting dummy."):ELSEIF DEBUG AND 8 PROCbot:PRINT"expr: Inserting `dummy before , or in fn(`dummy)"
+    tok$="idt.`dummy"
+    chi%=DUMMY%:typ%=0:atom%=1:prc%=255
+   ENDIF
+  ENDIF
+
+  IF chi%<>-1 THEN
+   new%?prec=prc%: new%?type=typ%
+   new%!parn=curr%:new%!left=0
+   new%!right=chi%:new%?brax=brace%
+   new%?atom=atom%:brace%=0
+
+   IF typ%=0 new%!tptr=chi%!type:ELSE new%!tptr=0
+
+   IF curr%<>0 THEN
+    curr%!right=new%
+   ELSE
+    tree%=new%
+   ENDIF
+   curr%=new%
+  ENDIF
+
+  otk$=tok$:tok$=FNtoken
+
+ UNTIL LEFT$(otk$,3)="idt" OR LEFT$(otk$,3)="num" OR LEFT$(otk$,3)="str"
+
+ REM encounter postfix (++,--, ->, and .), and ( ],),;,and } ).
+
+ post%=TRUE
+
+ REPEAT
+  IF DEBUG AND 8 PROCbot:PRINT"expr: Postfix: brak$="brak$
+  CASE tok$ OF
+   WHEN "syb.)":
+    IF RIGHT$(brak$)<>"(" AND RIGHT$(brak$)<>"[" THEN
+     CASE RIGHT$(brak$) OF
+      WHEN "?"  :PROCerror("WARNING - Excess ) in ?..:")
+      WHEN ""   :parsed%=TRUE:post%=FALSE
+      OTHERWISE :PROCerror("Warning - Ignoring excess ) due to '"+RIGHT$(brak$)+"'")
+     ENDCASE
+    ELSE
+     brak$=LEFT$(brak$)
+     IF curr%?brax=0 curr%=curr%!parn:PROCtypify(curr%)
+     WHILE curr%?brax=0 AND curr%?type<>1
+      curr%=curr%!parn:PROCtypify(curr%)
+     ENDWHILE
+     IF curr%?brax=0 AND curr%?type=1 THEN
+      PROCerror("Warning - Matching [) as array.")
+     ENDIF
+     curr%?brax=curr%?brax-1:curr%?atom=1
+     IF curr%?brax=0 AND curr%!parn<>0 AND ?(curr%!parn+type)=2 curr%=curr%!parn
+     PROCtypify(curr%)
+    ENDIF
+
+   REM Flag errors arr(ind] and arr[ind) in Š and ‹ code.
+   REM  correct both to arr[ind] since [,] are unlikely (,) matches.
+
+   REM But possibly work out properly when type checking done.
+
+   WHEN "syb.]":
+    IF RIGHT$(brak$)<>"(" AND RIGHT$(brak$)<>"[" THEN
+     CASE RIGHT$(brak$) OF
+      WHEN "?"  :PROCerror("WARNING - Excess ] in ?..:")
+      WHEN ""   :PROCerror("Warning - Ignored generally excessive ]s.")
+      OTHERWISE :PROCerror("Warning - Ignoring excess ] due to '"+RIGHT$(brak$)+"'")
+     ENDCASE
+    ELSE
+     brak$=LEFT$(brak$)
+     REPEAT
+      curr%=curr%!parn:PROCtypify(curr%)
+     UNTIL curr%?type=1 OR curr%?type=2 OR curr%!parn=0
+     IF curr%?type=2 THEN
+      PROCerror("Warning - Matching (] as array.")
+      curr%?type=1
+     ENDIF
+     curr%?atom=1
+     IF curr%?brax=0 AND curr%!parn<>0 AND ?(curr%!parn+type)=2 curr%=curr%!parn
+    ENDIF
+    PROCtypify(curr%)
+   WHEN "syb.}","syb.{","syb.;":parsed%=TRUE:post%=FALSE
+
+   REM With ++ and --, and this code in this position,
+   REM  I think I can always simply steal curr%.
+
+   WHEN "syb.++","syb.--":
+    IF tok$="syb.++" typ%=5:ELSEtyp%=6
+    new%=FNnew(expr%)
+    new%?type=typ%:new%?atom=0
+    new%?prec=16
+    new%!left=0:new%!right=0
+
+    new%!parn=curr%!parn
+    IF new%!parn<>0 !((new%!parn)+right)=new%:ELSE tree%=new%
+
+     REM Parent co-opted, curr% is right child or top
+
+    new%!right=curr%:curr%!parn=new%
+
+     REM new% is curr%'s parent, curr% is new%'s right child
+
+    new%?brax=curr%?brax:curr%?brax=0:REM take brackets
+    curr%=new%
+    PROCtypify(new%)
+
+   WHEN "syb.->","syb..":
+    IF tok$="syb.->" typ%=3:ELSEtyp%=4
+    new%=FNnew(expr%)
+    new%?type=typ%:new%?atom=0
+    new%?prec=16
+    new%!left=0:new%!right=0
+
+    IF DEBUG AND 1 PROCbot:PRINT"Expr: Putting '->' onto ";:PROCprint(curr%)
+
+    new%!parn=curr%!parn
+    IF new%!parn<>0 !((new%!parn)+right)=new%:ELSE tree%=new%
+     REM Parent co-opted, curr% is right child or top
+    new%!left=curr%:curr%!parn=new%
+     REM new% is curr%'s parent, curr% is new%'s left child
+    new%?brax=curr%?brax:curr%?brax=0:REM take brackets
+
+    REM Now work out new->right; == offset required
+
+    tmp%=curr%!tptr
+
+    IF tok$="syb.->" THEN
+
+     REM Is LHS a pointer?
+
+     IF tmp%?nodt=4 AND ( tmp%!locn=1 OR tmp%!locn=2 ) THEN
+      tmp%=tmp%!type
+     ELSE
+      PROCerror("Error - Pointer required for -> operator.")
+     ENDIF
+
+    ENDIF
+
+    IF tmp%?nodt=1 tmp%=tmp%!type:REM open typedef
+
+    tok$=FNtoken
+
+    IF tmp%?nodt<>5 AND tmp%?nodt<>6 THEN
+     PROCerror("Error - Struct type required for . or ->")
+    ELSE
+     typ%=tmp%!type
+     WHILE typ%<>0 AND $(typ%!name)<>MID$(tok$,5)+"I"
+      IF DEBUG AND 8 PROCbot:PRINT"expr: Want ";MID$(tok$,5);"I";" got ";$FNget(typ%,"name",idtr%)
+      typ%=typ%!right
+     ENDWHILE
+     IF typ%=0 THEN
+      PROCerror("Error - Unknown tag name. (type is void)")
+      REM Program a 'best match' facility maybe
+      new%!tptr=VoidType%:new%!right=0
+     ELSE
+      new%!tptr=typ%!type:new%!right=typ%!locn
+     ENDIF
+    ENDIF
+
+    curr%=new%
+
+    IF DEBUG AND 1 PROCbot:PRINT"Expr: After insertion of '->' :";:PROCprint(curr%)
+
+   OTHERWISE: post%=FALSE
+              IF DEBUG AND 8 PROCdebug:PRINT"expr: not a postfix:";tok$
+              IF LEFT$(tok$,3)="idt" OR LEFT$(tok$,3)="kwd" parsed%=TRUE:PROCerror("Warning - Missing ; inserted after expression"):IF DEBUG AND 8 PROCdebug:PRINT"expr: Parsed=TRUE"
+  ENDCASE
+  IF post% THEN
+   IF DEBUG AND 8 PROCdebug:PRINT"expr: Postfix:"tok$:PROCprint(curr%)
+   tok$=FNtoken
+  ENDIF
+ UNTIL NOT post%
+
+ IF LEFT$(tok$,3)="syb" AND NOT parsed% THEN
+
+  new%=FNnew(expr%)
+
+  typ%=INSTR("  "+ops$,LEFT$(MID$(tok$,5)+"  ",3))/3
+
+  IF typ%=2 OR typ%=1 OR typ%=34 brace%=1:brak$+=RIGHT$(tok$)
+   REM function(bracket) or arr[ind] or query?operator gives bracket & marker.
+
+  new%?type=typ%:new%?atom=0:new%?prec=prc%:new%!tptr=0
+  new%!left=0:new%!right=0
+
+  IF DEBUG AND 8 PROCdebug:IF FNget(tree%,"atom",expr%)<>0 PRINT"tree atomic."
+  IF DEBUG AND 8 PROCdebug:PRINT"expr: New=";:PROCprint(new%):PRINT", comparing ";:PROCprint(curr%):PRINT
+
+  IF NOT rtl% THEN
+
+   WHILE prc%<=curr%?prec AND curr%?brax=0
+    REM The '=' is only necessary if operation is L-assoc
+
+    IF DEBUG AND 8 PROCdebug:PROCprint(new%):PRINT" less than ";:PROCprint(curr%):PRINT"; climbing"
+
+    curr%=curr%!parn:REM climb tree
+    PROCtypify(curr%)
+
+   ENDWHILE
+
+   IF DEBUG AND 8 PROCdebug:PRINT"expr: New->prec:";FNget(new%,"prec",expr%)" Curr->prec:";FNget(curr%,"prec",expr%),curr%?prec" Curr->brax:";FNget(curr%,"brax",expr%)
+
+   IF prc% > curr%?prec AND curr%?atom=0 curr%=curr%!right
+
+  ELSE
+
+   WHILE prc%<curr%?prec AND curr%?brax=0
+   REM The '=' is only necessary if operation is L-assoc
+
+    IF DEBUG AND 8 PROCdebug:PROCprint(new%):PRINT" less than ";:PROCprint(curr%):PRINT"; climbing"
+
+    curr%=curr%!parn:REM climb tree
+    PROCtypify(curr%)
+
+   ENDWHILE
+
+   IF DEBUG AND 8 PROCdebug:PRINT"expr: New->prec:";FNget(new%,"prec",expr%)" Curr->prec:";FNget(curr%,"prec",expr%)" Curr->brax:";FNget(curr%,"brax",expr%)
+
+   IF prc% >= curr%?prec AND curr%?atom=0 curr%=curr%!right
+
+  ENDIF
+
+  parent%=curr%!parn
+  IF parent%<>0 AND typ%=49 THEN
+   IF parent%?type=34 THEN
+    IF RIGHT$(brak$)<>"?" THEN
+     PROCerror("Warning - Missing brackets within ?..:")
+     WHILE RIGHT$(brak$)<>"?" brak$=LEFT$(brak$):ENDWHILE
+    ENDIF
+    brak$=LEFT$(brak$)
+    parent%?type=35:new%?type=36:new%?prec=3
+
+    IF DEBUG AND 8 PROCdebug:PRINT"expr: Removing an invisible bracket due to :. New value ";FNget(curr%,"brax",expr%)-1
+
+    curr%?brax=curr%?brax-1
+   ELSE
+    PROCerror("Warning - Extra colon found. Treating as a weak comma.")
+   ENDIF
+  ELSE
+   IF typ%=49 PROCerror("Warning - Extra colon found. Treating as a weak comma.")
+  ENDIF
+
+  REM steal subtree 'curr%' from its parent and substitute new%.
+
+  IF DEBUG AND 8 PROCdebug:PRINT"expr: Stealing ";:PROCprint(curr%):PRINT" into ";:PROCprint(new%)
+
+  new%!parn=parent%
+  IF parent%<>0 THEN
+   parent%!right=new%
+  ELSE
+   tree%=new%
+  ENDIF
+   REM Parent co-opted, curr% is right child or top
+
+  new%!left=curr%:curr%!parn=new%
+
+   REM new% is curr%'s parent, curr% is new%'s left child
+
+  new%?brax=curr%?brax:curr%?brax=0:REM take brackets
+  curr%=new%
+
+  IF DEBUG AND 8 PROCdebug:PRINT'"   Gives ";:PROCprint(curr%):PRINT
+
+ ENDIF
+
+ IF NOT parsed% tok$=FNtoken
+
+UNTIL LEFT$(tok$,3)="eof" OR parsed%
+
+IF LENbrak$<>0 PROCerror("WARNING - Missing bracketting:"+brak$)
+
+typ%=curr%?type
+
+IF DEBUG AND 8 PROCbot:PRINT"expr: EOF? type=";typ%;" left=";FNget(curr%,"left",expr%);" right=";FNget(curr%,"right",expr%)
+
+IF curr%!right=0 AND typ%<>3 AND typ%<>4 PROCerror("WARNING - Unexpected end of file.")
+IF curr%!left =0 AND (typ%=3 OR typ%=4)  PROCerror("WARNING - Unexpected end of file.")
+
+WHILE curr%<>tree% PROCtypify(curr%):curr%=curr%!parn:ENDWHILE
+
+PROCtypify(tree%):IF DEBUG AND 8 PROCdebug:PROCprint(tree%)
+
+:=tree%
+
+DEFFNderef(curr%):REM Introduce a typed dereference node above this one.
+
+              REM ** WARNING: ALWAYS LINKED AS RIGHT CHILD OF PARENT **
+LOCALtmp%
+ tmp%=FNnew(expr%):tmp%?type=10
+ tmp%!left=0:tmp%!right=curr%:tmp%!parn=curr%!parn
+ !((curr%!parn)+right)=tmp%:tmp%?brax=curr%?brax
+ tmp%!tptr=!((curr%!tptr)+type):tmp%!prec=curr%!prec
+:=tmp%
+
+
+DEFPROCtypify(RETURN curr%):REM This should only be called if node is set.
+
+REM THIS IS BY NO MEANS COMPLETE, BUT IT SHOULD CATCH MOST OF THE SUBTLER
+REM  ERRORS, AND IT WILL BE SUFFICIENT FOR ENCODING AN-C
+
+LOCAL left%,right%,tl%,tr%,typ%
+typ%=curr%?type
+left%=curr%!left:tl%=left%!tptr
+IF typ%<>3 AND typ%<>4 AND typ%<>0 right%=curr%!right:tr%=right%!tptr:ELSEright%=0:tr%=0
+
+ CASE typ% OF
+
+  WHEN 0: REM Identifiers and constants are set anyway.
+
+  WHEN 1: REM If in a[b], b[] or *b, swap a with b
+
+   IF tr%?nodt=4 AND ( tr%!locn=1 OR tr%!locn=2 ) THEN
+    IF tl%!locn=1 OR tl%!locn=2 THEN
+     PROCerror("WARNING - Array index is a pointer. (not dereferenced)")
+    ELSE
+     PROCerror("Style - Array index[Array id] expression found.")
+     SWAP left%,right%:SWAP tl%,tr%
+     curr%!left=left%:curr%!right=right%
+    ENDIF
+   ENDIF
+   IF tl%?nodt=4 AND ( tl%!locn=1 OR tl%!locn=2 ) THEN
+    curr%!tptr=tl%!type
+   ELSE
+    PROCerror("Error - Array reference is not an array/pointer type.")
+    curr%!tptr=tl%!type
+   ENDIF
+
+  WHEN 2: REM a(b) gets a's return type. Allows for (*a)(b) compilation.
+
+   IF tl%?nodt=4 AND tl%!locn=3 THEN
+    curr%!tptr=!((tl%!type)+type)
+   ELSE
+    PROCerror("ERROR - Not a function type")
+    curr%!tptr=tl%!type
+   ENDIF
+
+  WHEN 3,4: REM This node should never be changed, it should be correct.
+
+
+  WHEN 5,6,13,14: REM No change for these.
+
+  REM TRAP CONST, FUNCTION NAMES, ARRAY NAMES ETC HERE.
+
+   curr%!tptr=tr%
+
+  WHEN 7: REM Put the type as 'pointer to' old type.
+
+   REM For this, we will need to augment the idtree with a kludge
+   REM  typedef if there isn't a pointer-to type already.
+   REM At the moment, we'll just cope with official typedefs.
+
+   REM I could alt. set a spare bit in (say) 'atom', but that would
+   REM  require a whole load of fiddling which I'm loath to do.
+
+   REM I have a slight worry that not all the nodes are getting lost once
+   REM  they're dead, ie that the id tree needs a more rigorous
+   REM  dismantling than it gets at the moment.
+
+   IF DEBUG AND 8 PROCbot:PRINT"typify: &y operator, tr->nodt=";FNget(tr%,"nodt",idtr%);" tl->nodt=";FNget(tl%,"nodt",idtr%);" type=";typ%
+
+   IF typ%=3 OR typ%=4 ``=( tl%?nodt=5 OR tl%?nodt=6 ):ELSE``=FALSE
+
+   IF tr%?nodt=1 OR tr%?nodt=5 OR tr%?nodt=6 OR `` THEN
+    IF typ%<>3 AND typ%<>4 THEN
+
+     REM Fix for me when I keep putting &<hex-number> like in BASIC
+     REM  This will only catch things starting with a number though
+
+     IF typ%=0 THEN
+      IF INSTR(" 0123456789",CHR$?FNget(right%,"name",idtr%))>1 PROCerror("Error - 0x preceedes hex, not &"):tr%=IntType%
+     ENDIF
+     curr%!tptr=tr%!locn
+    ELSE
+     curr%!tptr=tl%!locn
+    ENDIF
+   ELSE
+    PROCerror("Internal - &<id> for non-typedef/struct/union not supported. (using int*)")
+    curr%!tptr=IntType%!locn
+   ENDIF
+   IF DEBUG AND 8 PROCdebug:PRINT"typify: post-&"
+
+  WHEN 8,9,11,12: REM Pass the type on, but if a pointer and not !(),
+                  REM whinge and deref
+
+   IF typ%=9 THEN
+REM     PROCerror("      - Removal of auto-pointer deref may break code.")
+   ELSE
+
+     WHILE tr%?nodt=4 AND ( tr%!locn=1 OR tr%!locn=2 )
+      PROCerror("Warning - Bad pointer operation. (Pointer dereferenced.)")
+      right%=FNderef(right%):tr%=right%!tptr
+     ENDWHILE
+
+   ENDIF
+
+   curr%!tptr=tr%
+
+  WHEN 10: REM Pass on the deref'd type.
+
+   IF tr%?nodt=4 AND (tr%!locn=1 OR tr%!locn=2) THEN
+    curr%!tptr=tr%!type
+   ELSE
+    PROCerror("Warning - Attempt to dereference a non-pointer/array ignored.")
+    IF DEBUG AND 8 PROCbot:PRINT"typify: expected 1 or 2, but tr->locn=";FNget(tr%,"locn",idtr%):PROCdebug
+    curr%!tptr=tr%
+   ENDIF
+
+  WHEN 15: REM When I implement this, the type will be from left.
+
+   curr%!tptr=left%
+
+  WHEN 16,17,18,21,22,29,30,31: REM Both types int/char
+
+   IF tl%?nodt=4 PROCerror("Warning - Left hand expression of "+FNcut(MID$(opm$,(curr%?type)*3-2,3))+" not a basic type.")
+
+   IF tr%?nodt=4 PROCerror("Warning - Right hand expression of "+FNcut(MID$(opm$,(curr%?type)*3-2,3))+" not a basic type.")
+   IF DEBUG AND 8 PROCdebug
+
+   curr%!tptr=IntType%
+
+  WHEN 19: REM Add can take one pointer or two ints.
+
+   WHILE tl%?nodt=4 AND tr%?nodt=4
+    PROCerror("Error - Pointers cannot be added. (Second dereferenced)")
+    right%=FNderef(right%):tr%=right%!tptr
+   ENDWHILE
+
+   IF FNget(tl%,"nodt",idtr%)<>1 curr%!tptr=tl%:ELSE curr%!tptr=tr%
+
+  WHEN 20: REM Minus can take pointer - pointer, pointer - int, int - int
+           REM  but NOT int - pointer (obviously).
+
+   IF tr%?nodt=4 THEN
+    IF tl%?nodt=1 PROCerror("WARNING - Found 'number minus pointer'")
+    curr%!tptr=IntType%
+   ELSE
+    curr%!tptr=tl%
+   ENDIF
+
+  WHEN 23,24,25,26,27,28,32,33: REM Return integers (booleans)
+
+REM   IF tl%?nodt<>tr%?nodt AND (tl%=IntType% OR tr%<>CharType%) AND (tr%=IntType% OR tl%<>CharType%) PROCerror("Warning - Comparison of two different types.")
+
+   curr%!tptr=IntType%
+
+  WHEN 34,35,36: REM Query types. Valid to the right child
+
+   curr%!tptr=tr%
+
+  WHEN 37,38,39,40,41,42,43,44,45,46,47:REM Assignment operators
+
+   REM id, *, [] ., -> on the left, nonpointer? on the right
+
+   REM FOR THE MOMENT TOO, WE'RE DISALLOWING STRUCT COPYING.
+
+   tem%=0
+   IF left%?type=0 tem%=!((left%!right)+nodt)=3
+   IF tem% OR ( tl%?nodt=4 AND tl%!locn<3 ) OR tl%=IntType% OR tl%=CharType% OR tl%<&8000 THEN
+    curr%!tptr=tl%
+   ELSE
+    PROCerror("ERROR - Attempted assignment to an r-type.")
+    curr%!tptr=tr%
+   ENDIF
+
+  WHEN 48,49: REM Both of the comma types
+
+   IF DEBUG AND 8 PROCdebug
+
+   curr%!tptr=tr%
+
+  OTHERWISE:
+   PROCerror("Internal - Unknown expr type "+STR$FNget(curr%,"type",expr%)+" in type checking. (making void)")
+
+   curr%!tptr=VoidType%
+
+ ENDCASE
+ENDPROC
+
+*************************************
+
+DEFPROCreport(m$)
+ WHILE ASC RIGHT$(m$)<32 m$=LEFT$(m$):ENDWHILE
+ PROCbot
+ IF listing%=0 PRINT
+ PRINT"Near:";RIGHT$("    "+STR$LinNo%,5);", ";m$
+ IF listing%=0 PRINT"     ";:SOUND1,-15,120,10
+ BPUT#error_chan%,"Near:"+RIGHT$("    "+STR$LinNo%,5)+", "+m$
+ PROCtop
+ENDPROC
+
+DEFPROCerror(m$)
+ PROCbot
+ IF listing%=0 PRINT
+ PRINT"Near:";RIGHT$("    "+STR$LinNo%,5);", '";LastBit$;"' ";m$
+ IF listing%=0 PRINT"     ";:SOUND1,-15,120,10
+ BPUT#error_chan%,"Near:"+RIGHT$("    "+STR$LinNo%,5)+", '"+LastBit$+"' "+m$
+ PROCtop   
+ENDPROC
+
+*************************************
+
+DEFPROClexinit(file$)
+
+ IFsplit% PRINT"[    1] ";:CursPos2%=VPOS*256+POS:PRINTTAB(0,height%/2);STRING$(width%-LENfile$,"-");file$;
+ _top%=FALSE:CursPos1%=0:PROCtop:CursPos1%=0
+
+ LOCAL DATA
+
+ DIM ifile$(8),ptr%(8),lin%(8):incl%=0
+
+ fi%=OPENINfile$
+ prel%=-1:MaxLin%=-1:LinNo%=1:LastBit$="SPC SPC SPC SPC SPC SPC SPC SPC "
+
+ ch%=FNrch
+
+ REM Read keywords and index array
+
+ RESTORE +1:READ size%:DIM kw$(size%),kw%(26):l%=0:kw%()=size%
+
+REM ** Should take argv, argc and sizeof out, since they aren't real kwds.
+REM ** Maybe also char, int, float since they're types, but then long and
+REM ** unsigned are strange too.
+
+DATA 34,auto,break,case,char,const,continue,default,do,double,else,enum,extern,float,for,goto,if,int,long,register,return,short,signed,sizeof,static,struct,swi,switch,sys,typedef,union,unsigned,void,volatile,while
+
+ FORA%=1TOsize%
+  READ kw$(A%)
+  IF l%+96<ASCkw$(A%) THEN
+   IF kw%(l%)=size% kw%(l%)=size%
+   l%+=1
+   WHILE l%+96<ASCkw$(A%)
+    kw%(l%)=size%:l%+=1
+   ENDWHILE
+   kw%(l%)=A%
+  ENDIF
+ NEXT
+
+ lasttok$="":lastprc%=255
+
+ENDPROC
+
+DEFPROClexdown
+ CLOSE#fi%
+ENDPROC
+
+REM OK to use prc% as global since originates from FNtoken
+
+DEFPROCtokback(tok$):lasttok$=tok$:lastprc%=prc%:ENDPROC
+
+DEFFNtoken
+
+ LOCAL tmp%,th$
+
+ th$=lasttok$:prc%=lastprc%
+ lasttok$="" :lastprc%=255
+
+
+ REPEAT
+
+  REM Number recognition
+
+  IF th$="" AND 48<=ch% AND ch%<=57 THEN
+   REM note: no floats recognised (yet!).
+   REPEAT
+    th$+=CHR$ch%
+    ch%=FNread
+   UNTIL 48>ch% OR ch%>57
+   IF th$="0" AND CHR$ch%="x" THEN
+    th$="":ch%=FNread
+    REPEAT
+     IF INSTR("abcdef",CHR$ch%) ch%+=32
+     th$+=CHR$ch%
+     ch%=FNread
+    UNTIL INSTR("0123456789ABCDEF",CHR$ch%)=0
+    th$="&"+th$
+   ENDIF
+   IF LEFT$(th$,1)="0" THEN
+    tmp%=0
+    REPEAT
+     tmp%=(tmp%<<3)OR(ASCth$-48):th$=MID$(th$,2)
+    UNTIL th$="":th$=STR$tmp%
+   ENDIF
+   th$="num."+th$
+   ch%=FNch(ch%)
+   prc%=255
+  ENDIF
+
+  REM Character '<char>' recognition (and convertion to num.xxx)
+
+  IF th$="" AND ch%=ASC"'" THEN
+   `=0:``=0
+   ch%=FNread
+   REPEAT
+     ch%=FNstrcha(ch%):IF ch%>256 ch%-=256
+     `=` OR ch%<<``:``+=8
+     ch%=FNread
+   UNTIL ch%=ASC"'" OR ``=32
+   th$="num."+STR$`
+   IF ch%<>ASC"'" PROCerror("Warning - Missing ' from character definition."):ELSEch%=FNrch
+   prc%=255
+  ENDIF
+
+  REM Identifiers and keywords
+
+  IF th$="" AND ( (65<=ch% AND ch%<=90) OR (97<=ch% AND ch%<=122) OR ch%=95 ) THEN
+   REPEAT
+    th$+=CHR$ch%
+    ch%=FNread
+   UNTIL NOT ((48<=ch% AND ch%<=57) OR (65<=ch% AND ch%<=90) OR (97<=ch% AND ch%<=122) OR ch%=95)
+   IF FNkeyw(th$) th$="kwd."+th$ ELSE th$="idt."+th$
+   IF th$="kwd.swi" th$="kwd.sys":PROCerror("Warning - Replaced 'swi' by 'sys'.")
+   ch%=FNch(ch%)
+   prc%=255
+  ENDIF
+
+  REM Comments
+
+  IF th$="" AND ch%=47 THEN
+   IF FNread<>ASC"*" THEN
+    PROCback
+   ELSE
+    ch%=FNread:out%=FALSE:IF DEBUG PROCbot:PRINT
+    WHILE (NOT out% OR ch%<>47) OR ch%=-1
+     out%=CHR$ch%="*":ch%=FNread:IF DEBUG VDUch%
+    ENDWHILE
+    IF DEBUG PROCbot:PRINT
+   th$="com."
+   ch%=FNrch
+   ENDIF
+  ENDIF
+
+  REM Symbols
+
+  IF th$="" AND INSTR("+-!%^&/*><|=?::~.,;{}[]()",CHR$ch%) THEN
+   th$=CHR$ch%:ch%=FNread
+   CASE th$ OF
+    WHEN "+","-":
+     CASE CHR$ch% OF
+      WHEN "=":    th$+="=":ch%=FNread
+      WHEN "+","-":IF ch%=ASCth$ th$+=th$:ch%=FNread
+      WHEN ">":    IF th$="-" th$="->":ch%=FNread
+     ENDCASE
+    WHEN "*","/","%","&","|","^","=","!",">","<":
+     IF INSTR("<>",th$) AND ch%=ASCth$ th$+=th$:ch%=FNread
+     IF ch%=61 th$+="=":ch%=FNread:pre%=2
+     IF INSTR("&|",th$) AND ch%=ASCth$ th$+=th$:ch%=FNread
+    WHEN ".":
+     IF ch%=46 THEN
+      ch%=FNread
+      IF ch%<>46 PROCerror("Warning - Found '..' assuming '...'") ELSE ch%=FNread
+     th$="..."
+    ENDIF
+   ENDCASE
+   ch%=FNch(ch%)
+   rtl%=FALSE
+   CASE th$ OF
+    WHEN "[","]","{","}","(",")","->",".","++","--":prc%=16
+    WHEN "~","!":prc%=15:rtl%=TRUE
+         REM Right to left... *,-,+,&,++,-- PREFIX
+    WHEN "FN":rtl%=TRUE:REM (type) E, Right to left...
+    WHEN "*","/","%":prc%=13
+    WHEN "+","-":prc%=12
+    WHEN ">>","<<":prc%=11
+    WHEN ">",">=","<","<=":prc%=10
+    WHEN "==","!=":prc%=9
+    WHEN "&":prc%=8
+    WHEN "^":prc%=7
+    WHEN "|":prc%=6
+    WHEN "&&":prc%=5
+    WHEN "||":prc%=4
+    WHEN "?":prc%=3
+    WHEN "=","+=","-=","*=","/=","%=",">>=","<<=","&=","^=","|=":prc%=2
+         rtl%=TRUE:REM Right to left...
+    WHEN ",":prc%=1
+    WHEN ":":prc%=0:rtl%=TRUE
+    WHEN "...":prc%=255:REM effectively an identifier
+   ENDCASE
+   th$="syb."+th$
+   IF th$="syb...." th$="idt...."
+  ENDIF
+
+  REM String constants
+
+  IF th$="" AND ch%=34 THEN
+    ch%=FNstrcha(FNread)
+REM    IF ch%=34 th$=""""""
+    rtl%=FALSE
+    REPEAT
+     WHILE ch%<>34 AND ch%<>-1
+      IF ch%>=32 AND ch%<>127 AND ch%<>256+34 THEN
+       th$+=CHR$ch%
+      ELSE
+       th$+="""+CHR$"+STR$(ch% AND 255)+"+"""
+      ENDIF
+      ch%=FNstrcha(FNread)
+     ENDWHILE
+     ch%=FNrch:IF ch%=34 ch%=FNstrcha(FNread):rtl%=TRUE:ELSErtl%=FALSE
+    UNTILch%<>34 AND NOT rtl%
+    th$="str."+th$+"""+CHR$0+"""
+  ENDIF
+
+  REM Any other business (unknown characters, EOF)
+
+  IF th$="" AND ch%<>-1 THEN
+   th$="Warning - Ignoring misplaced character 0x"+STR$~ch%
+   IF ch%<32 OR ch%=127 ELSE th$+=" '"+CHR$ch%+"'"
+   PROCerror(th$):th$=""
+   ch%=FNrch
+  ENDIF
+
+  IF th$="" AND ch%=-1 th$="eof.ERROR - End of file reached"
+
+  IF th$="com." th$=""
+
+ UNTILth$<>""
+
+ IF DEBUG>1 PROCbot:PRINT'th$
+
+ IF DEBUG>1 AND MaxLin%<LinNo% MaxLin%=LinNo%:PROCbot:PRINT;"At line ";MaxLin%;CHR$13;
+
+:=th$
+
+DEFPROCback:LOCALC%:C%=PTR#fi%-1:PTR#fi%=C%:LinNo%+=BGET#fi%=10:PTR#fi%=C%:MID$(LastBit$,1)=" "+LastBit$:ENDPROC
+
+DEFPROCrback:LOCALC%:C%=PTR#fi%-1:PTR#fi%=C%:PTR#fi%=C%:MID$(LastBit$,1)=" "+LastBit$:ENDPROC
+
+DEFFNread
+LOCALch%
+IF prel%<>-1 ch%=prel%:prel%=-1:ELSE ch%=FNrawread
+IF ch%<>ASC"?" :=ch%
+IF FNrawread<>ASC"?" THEN
+ PROCback
+ELSE
+ ch%=FNrawread
+ ch%=INSTR("=()<>/!-'",CHR$ch%)
+ IF ch%=0 THEN
+  PROCback:PROCback:ch%=ASC"?"
+ ELSE
+  ch%=ASCMID$("#[]{}\|~^",ch%,1)
+ ENDIF
+ENDIF
+:=ch%
+
+DEFFNrawread
+ LOCALC%
+ IF NOT EOF#fi% THEN
+  C%=BGET#fi%
+  IF C%>=32 AND C%<>127 LastBit$=MID$(LastBit$,2)+CHR$C%:ELSELastBit$=MID$(LastBit$,2)+"`"
+
+  IF NOT _top% PROCtop
+  IF listing% THEN
+    IF C%>31 VDUC%:ELSEIF C%=10 LinNo%+=1:PRINT'"[";RIGHT$("    "+STR$LinNo%,5);"] ";
+  ELSE
+    IF C%=10 LinNo%+=1:IF INKEY-3 PRINT;STRING$(5,CHR$127);RIGHT$("    "+STR$LinNo%,5);
+  ENDIF
+ ELSE
+  IF incl% THEN
+   CLOSE#fi%:IF listing% PRINT
+   incl%-=1:fi%=OPENINifile$(incl%):file$=ifile$(incl%)
+   PTR#fi%=ptr%(incl%):LinNo%=lin%(incl%):MaxLin%=LinNo%:C%=10
+  ELSE
+   C%=-1
+  ENDIF
+ ENDIF
+
+ IF C%=10 THEN
+  IF BGET#fi%<>ASC"#" THEN
+   IF NOT EOF#fi% PROCrback
+  ELSE
+   hash$=GET$#fi%:PROCrback
+   PRINT"#";hash$;
+   IF LEFT$(hash$,1)="#" hash$=""
+   IF hash$<>"" PROCreport("#"+hash$)
+   IF LEFT$(hash$,7)="include" THEN
+    ifile$(incl%)=file$:ptr%(incl%)=PTR#fi%:lin%(incl%)=LinNo%:incl%+=1
+    CLOSE#fi%
+    file$=MID$(hash$,INSTR(hash$,"""")+INSTR(hash$,"<")+1)
+    file$=LEFT$(file$,INSTR(file$,"""")+INSTR(file$,">")-1)
+    IF INSTR(hash$,"<") THEN
+     file$="<MC$Path>"+RIGHT$(file$,1)+"."+LEFT$(file$,LENfile$-2)
+    ELSE
+     file$=directory$+"."+RIGHT$(file$,1)+"."+LEFT$(file$,LENfile$-2)
+    ENDIF
+    LinNo%=1:MaxLin%=-1:fi%=OPENINfile$:IF listing% PRINT''"[    1] ";
+   ENDIF
+  ENDIF
+ ENDIF
+
+ :=C%
+
+DEFFNrch:=FNch(FNread)
+
+DEFFNch(ch%)
+  WHILE ch%<=32 AND ch%<>-1
+   ch%=FNread
+  ENDWHILE
+  err%=0
+ =ch%
+
+DEFFNstrcha(ch%)
+ IF ch%=ASC"\" THEN
+  ch%=FNread
+  IF 47<ch% AND ch%<56 THEN
+   _`=0:`_=0
+   WHILE _`<3 AND 47<ch% AND ch%<56
+     `_=`_*8+ch%-48:_`+=1:ch%=FNread
+   ENDWHILE
+   PROCback:ch%=`_
+  ELSE
+   CASE CHR$ch% OF
+    WHEN """":ch%=34+256
+    WHEN "a":ch%=7
+    WHEN "b":ch%=8
+    WHEN "f":ch%=12
+    WHEN "n":ch%=13:prel%=10
+    WHEN "r":ch%=13
+    WHEN "t":ch%=9
+    WHEN "v":ch%=10
+    WHEN "x":REM hex number 0-255
+     PROCerror("Warning - Hex \xdd not implemented.")
+    OTHERWISE:ch%+=256:REM CHR$ will cut this off, but this will trap \"
+   ENDCASE
+  ENDIF
+ ENDIF
+:=ch%
+
+DEFFNkeyw(th$)
+ IF 96<ASCth$ AND ASCth$<123 THEN
+  k%=kw%(ASCth$-96)
+  WHILE th$>kw$(k%) AND k%<kw%(0)
+   k%+=1
+  ENDWHILE
+ ELSE
+  k%=0
+ ENDIF
+:=th$=kw$(k%)
