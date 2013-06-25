@@ -1,0 +1,76 @@
+REM > <Basic$Lib>.Records  Record handler    PROC_RecordHelp
+
+MODE0
+PROC_RecordHelp
+END
+
+DEFPROC_RecordHelp
+
+PRINT'"Record handler V1.1"'"--------------"'
+
+
+PRINT"FNdeclare(""<fielddec>{,<fielddec>}"")  Returns struct type."'" <fielddec>::= [^ % ? | $<two digit number]<identifier>"'" eg list%=FNdeclare(""%number.^next"")"'
+
+PRINT"FNnew(struct)  Returns a disused structure"'" eg newnode%=FNnew(list%)"'
+
+PRINT"PROClose(pointer,struct) Maintains a list of spare structures"'" eg PROClose(deadnode%,list%)"'
+
+PRINT"PROCputZ,putB,putR,putS(value,pointer,field,struct) pointer->field=value"'" eg PROCputZ(RND,node%,""number"",list%)"'" eg PROCputZ(nextnode%,node%,""next"",list%)"'
+
+PRINT"FNget(pointer,field,struct) Returns pointer->field"'" eg PRINTFNget(node%,""number"",list%)"'" eg nextnode%=FNget(node%,""next"",list%)"
+
+PRINT"FNlost(pointer,struct)      Returns true if pointer has been lost."
+
+ENDPROC
+
+REM *** Definitions beyond here ***
+
+REM 1/2 Bugfix - Unknown fields (except for substrings) trapped
+
+DEFFNdeclare(d$)
+LOCALL%,C%,s$:L%=0:C%=1:s$=""
+IF INSTR(d$,".")=0 ERROR 124,"No seperators (.s) in declaration"
+REPEAT
+ CASE MID$(d$,C%,1) OF
+  WHEN "^","%": s$+=CHR$L%+MID$(d$,C%,INSTR(d$,".",C%)-C%):L%+=4
+  WHEN "?"    : s$+=CHR$L%+MID$(d$,C%,INSTR(d$,".",C%)-C%):L%+=1
+  WHEN "|"    : s$+=CHR$L%+MID$(d$,C%,INSTR(d$,".",C%)-C%):L%+=5
+  WHEN "$"    : s$+=CHR$L%+"$"+MID$(d$,C%+3,INSTR(d$,".",C%)-C%-3):L%+=VALMID$(d$,C%+1)+1
+  OTHERWISE ERROR 121,"Funny type ("+MID$(d$,C%,1)+") in declare"
+ ENDCASE
+ C%=INSTR(d$,".",C%)+1
+UNTIL C%=1:L%=(L%+3 AND NOT 3)-1
+IF L%>255 ERROR 120,"Record size > 255"
+IF L%=-1 ERROR 120,"Record size = 0")
+DIM C% LENs$+6:$C%=STRING$(4,CHR$0)+CHR$L%+s$
+:=C%
+
+DEFFNnew(rec%):LOCALL%,M%
+IF !rec%=0 DIM M% rec%?4+4:M%!(rec%?4)=-1:=M%
+M%=!rec%:!rec%=!M%:M%!(rec%?4)=-1:=M%
+
+DEFPROClose(N%,rec%):IF N%=0 ERROR 123,"Given null pointer to lose"
+IF N%!(rec%?4)=0 ERROR 126,"Pointer already lost"
+!N%=!rec%:!rec%=N%:N%!(rec%?4)=0:ENDPROC
+
+DEFFNlost(N%,rec%):IF N%=0 :=TRUE
+IF N%!(rec%?4)=0 :=TRUE
+:=FALSE
+
+DEFFN__chk(rec%,n$):IF P%!(rec%?4)=0 ERROR 126,"Use of lost pointer"
+LOCALL%:L%=INSTR($(rec%+4),n$)+1:IF L%<>1 :=rec%?L%
+ERROR 124,"Unknown field identifier '"+n$+"'."
+
+DEFPROCputZ(N%,P%,n$,rec%):P%!FN__chk(rec%,n$)=N%:ENDPROC
+DEFPROCputB(N%,P%,n$,rec%):P%?FN__chk(rec%,n$)=N%:ENDPROC
+DEFPROCputR(N ,P%,n$,rec%):|(P%+FN__chk(rec%,n$))=N :ENDPROC
+DEFPROCputS(N$,P%,n$,rec%):$(P%+FN__chk(rec%,n$))=N$:ENDPROC
+
+DEFFNget(P%,n$,rec%)
+ CASE CHR$?(rec%+INSTR($(rec%+4),n$,1)+2) OF
+  WHEN "%","^": =P%!FN__chk(rec%,n$)
+  WHEN "?"    : =P%?FN__chk(rec%,n$)
+  WHEN "|"    : =|(P%+FN__chk(rec%,n$))
+  WHEN "$"    : =$(P%+FN__chk(rec%,n$))
+  OTHERWISE ERROR 122,"Bad basic type ("+MID$($rec%,INSTR($rec%,n$,1))+") internal data corruption?"
+ ENDCASE

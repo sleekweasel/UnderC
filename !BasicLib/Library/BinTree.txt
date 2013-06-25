@@ -1,0 +1,77 @@
+REM > <Basic$Lib>.BinTree  Binary tree system.  PROC_HelpBinTree
+
+LIBRARY "<Basic$Lib>.Records"
+
+DEFPROC_HelpBinTree
+
+PRINT"Binary Tree Manipulation"'"------------------------"'
+PRINT"Records must be declared with ^name,^left,^right. $^name points to"'" an ASCII string."'
+PRINT"In the following, root% MUST point to a dummy node, whose name is null."'
+PRINT"FNinsert(name$,root%,type%) Returns the address of a new node 'name$'."'"                            If it already exists, returns 0."
+PRINT"FNfind(name$,root%,type%)   Returns the address of the node 'name$'."'"                            If it doesn't exist, returns 0."
+PRINT"FNdelete(name$,root%,type%) Returns the address of a removed node 'name$'."'"                            If it didn't exist, returns 0."'
+PRINT"PROCaxe(root%,type%) PROClose's every node in the tree root% including"'"                     the original dummy one."
+
+ENDPROC
+
+DEFFNinsert(name$,root%,type%)
+LOCALO%,F%,S%,ot$:F%=root%:S%=0
+REPEAT
+ O%=F%
+ IF F% ot$=$FNget(F%,"name",type%):ELSEot$=""
+ IF name$>ot$ AND F% F%=FNget(F%,"right",type%)
+ IF name$<ot$ AND F% F%=FNget(F%,"left",type%)
+UNTIL F%=0 OR name$=ot$
+IF F%=0 THEN
+ S%=FNnew(type%)
+ DIM F% LENname$+2:$F%=name$:PROCputZ(F%,S%,"name",type%)
+ PROCputZ(0,S%,"left",type%):PROCputZ(0,S%,"right",type%)
+ IF name$>ot$ PROCputZ(S%,O%,"right",type%):ELSEPROCputZ(S%,O%,"left",type%)
+ENDIF
+:=S%
+
+DEFFNfind(name$,root%,type%)
+LOCALF%,ot$:F%=root%
+REPEAT
+ IF F% ot$=$FNget(F%,"name",type%):ELSEot$=""
+ IF name$>ot$ AND F% F%=FNget(F%,"right",type%)
+ IF name$<ot$ AND F% F%=FNget(F%,"left",type%)
+UNTIL F%=0 OR name$=ot$
+:=F%
+
+DEFFNdelete(name$,root%,type%)
+LOCALO%,F%,S%,ot$:F%=root%:S%=0
+REPEAT
+ O%=F%
+ IF F% ot$=$FNget(F%,"name",type%):ELSEot$=""
+ IF name$>ot$ AND F% F%=FNget(F%,"right",type%)
+ IF name$<ot$ AND F% F%=FNget(F%,"left",type%)
+UNTIL F%=0 OR name$=ot$
+IF F% THEN
+ IF FNget(F%,"left",type%)=0 OR FNget(F%,"right",type%)=0 THEN
+  IF FNget(F%,"left",type%)=0 THEN
+   S%=FNget(F%,"right",type%)
+  ELSE
+   S%=FNget(F%,"left",type%)
+  ENDIF
+ ELSE
+  S%=FNget(F%,"left",type%)
+  WHILE FNget(S%,"right",type%) S%=FNget(S%,"right",type%):ENDWHILE
+  S%=FNdelete($FNget(S%,"name",type%),F%,type%)
+  PROCputZ(FNget(F%,"left",type%),S%,"left",type%)
+  PROCputZ(FNget(F%,"right",type%),S%,"right",type%)
+ ENDIF
+ IF FNget(O%,"left",type%)=F% THEN
+  PROCputZ(S%,O%,"left",type%)
+ ELSE
+  PROCputZ(S%,O%,"right",type%)
+ ENDIF
+ENDIF
+:=F%
+
+DEFPROCaxe(node%,type%)
+IF node%=0 ENDPROC
+PROCaxe(FNget(node%,"left",type%),type%)
+PROCaxe(FNget(node%,"right",type%),type%)
+PROClose(node%,type%)
+ENDPROC
